@@ -6,6 +6,7 @@ export type ActivityLogDocument = HydratedDocument<ActivityLog>;
 export type ActivityAction =
   | 'DOCUMENT_CREATED'
   | 'DOCUMENT_RENAMED'
+  | 'DOCUMENT_DELETED'
   | 'PAGE_CREATED'
   | 'PAGE_UPDATED'
   | 'PAGE_LOCKED'
@@ -18,6 +19,7 @@ export type ActivityAction =
 export const ACTIVITY_ACTIONS: ActivityAction[] = [
   'DOCUMENT_CREATED',
   'DOCUMENT_RENAMED',
+  'DOCUMENT_DELETED',
   'PAGE_CREATED',
   'PAGE_UPDATED',
   'PAGE_LOCKED',
