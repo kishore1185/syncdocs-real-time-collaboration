@@ -7,6 +7,7 @@ import { PermissionsModule } from '../permissions/permissions.module';
 import { PagesModule } from '../pages/pages.module';
 import { ActivityLogsModule } from '../activity-logs/activity-logs.module';
 import { UsersModule } from '../users/users.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { UsersModule } from '../users/users.module';
     PagesModule,
     ActivityLogsModule,
     UsersModule,
+    NotificationsModule,
   ],
   controllers: [DocumentsController],
   providers: [DocumentsService],

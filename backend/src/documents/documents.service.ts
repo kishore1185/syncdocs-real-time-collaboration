@@ -7,6 +7,7 @@ import { PermissionsService } from '../permissions/permissions.service';
 import { PagesService } from '../pages/pages.service';
 import { ActivityLogsService } from '../activity-logs/activity-logs.service';
 import { UsersService } from '../users/users.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { DocumentRole, Permission, PermissionDocument } from '../permissions/schemas/permission.schema';
 
 /** Unambiguous alphabet (no 0/O, 1/I/L) so Room IDs can be read aloud. */
@@ -33,6 +34,7 @@ export class DocumentsService {
     private readonly pages: PagesService,
     private readonly activityLogs: ActivityLogsService,
     private readonly usersService: UsersService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async create(userId: string, title?: string): Promise<DocumentView> {
