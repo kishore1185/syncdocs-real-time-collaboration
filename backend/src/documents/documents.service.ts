@@ -82,12 +82,56 @@ export class DocumentsService {
     return (await this.toViews([doc], new Map([[documentId, role]])))[0];
   }
 
+  /** Full editor payload: metadata + every page the user may see, in page order. */
+  async open(documentId: string, userId: string) {
+    const document = await this.get(documentId, userId);
+    const pages = await this.pages.list(documentId);
+    const saveState = await this.pages.documentSaveState(documentId);
+    return { document, pages, saveState };
+  }
+
+  /** Title search restricted to documents the user already has a role on. */
+  async search(userId: string, term: string): Promise<DocumentView[]> {
+    const all = await this.listForUser(userId);
+    const q = term.trim().toLowerCase();
+    if (!q) return all;
+    return all.filter((d) => d.title.toLowerCase().includes(q) || d.roomId.toLowerCase().includes(q));
+  }
+
   /** Room ID lookup — public metadata only, no permission is granted here. */
   async findByRoomId(roomId: string) {
     const doc = await this.documentModel.findOne({ roomId: roomId.toUpperCase().trim() }).exec();
     if (!doc) throw new NotFoundException('No document exists with that Room ID.');
     return doc;
   }
+
+  /**
+   * Joining by Room ID grants viewer access if the user has none yet.
+   * Existing roles (editor/owner) are never downgraded.
+   */
+  async joinByRoomId(roomId: string, userId: string): Promise<DocumentView> {
+    const doc = await this.findByRoomId(roomId);
+    const existing = await this.permissions.roleFor(doc._id, userId);
+    if (!existing) {
+      const uid = new Types.ObjectId(userId);
+      await this.permissions.grant(doc._id, uid, 'viewer', doc.ownerId);
+      void this.activityLogs.record({
+        documentId: doc._id,
+        userId,
+        action: 'DOCUMENT_SHARED',
+        details: `Joined "${doc.title}" with Room ID ${doc.roomId}`,
+      });
+      const joiner = await this.usersService.findById(userId);
+      void this.notifications.push({
+        userId: doc.ownerId,
+        documentId: doc._id,
+        type: 'COLLABORATOR_JOINED',
+        message: `${joiner?.fullName ?? 'A collaborator'} joined "${doc.title}" as a viewer.`,
+      });
+    }
+    return (await this.toViews([doc], new Map([[doc._id.toString(), existing ?? 'viewer']])))[0];
+  }
+
 
   async rename(documentId: string, userId: string, title: string): Promise<DocumentView> {
     const role = await this.permissions.require(documentId, userId, 'editor');
