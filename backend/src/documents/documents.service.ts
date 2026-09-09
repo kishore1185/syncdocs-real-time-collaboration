@@ -136,13 +136,8 @@ export class DocumentsService {
     const owners = await this.usersService.findManyByIds(ownerIds);
     const ownerNames = new Map(owners.map((u) => [u._id.toString(), u.fullName]));
 
-    const counts = await this.pages['pageModel']
-      .aggregate<{ _id: Types.ObjectId; count: number }>([
-        { $match: { documentId: { $in: docs.map((d) => d._id) } } },
-        { $group: { _id: '$documentId', count: { $sum: 1 } } },
-      ])
-      .exec();
-    const pageCounts = new Map(counts.map((c) => [c._id.toString(), c.count]));
+    const pageCounts = await this.pages.countByDocument(docs.map((d) => d._id));
+
 
     return docs.map((d) => {
       const id = d._id.toString();
