@@ -112,6 +112,18 @@ export class PagesService implements OnModuleDestroy {
     await this.pageModel.deleteMany({ documentId }).exec();
   }
 
+  /** Page counts keyed by documentId string — used by the documents list view. */
+  async countByDocument(documentIds: Types.ObjectId[]): Promise<Map<string, number>> {
+    if (documentIds.length === 0) return new Map();
+    const counts = await this.pageModel
+      .aggregate<{ _id: Types.ObjectId; count: number }>([
+        { $match: { documentId: { $in: documentIds } } },
+        { $group: { _id: '$documentId', count: { $sum: 1 } } },
+      ])
+      .exec();
+    return new Map(counts.map((c) => [c._id.toString(), c.count]));
+  }
+
   // ------------------------------------------------------------ AUTOSAVE
 
   /**
