@@ -27,6 +27,9 @@ export class Page {
 
   @Prop({ type: String, default: null })
   lockPasswordHash!: string | null;
+
+  createdAt!: Date;
+  updatedAt!: Date;
 }
 
 export const PageSchema = SchemaFactory.createForClass(Page);

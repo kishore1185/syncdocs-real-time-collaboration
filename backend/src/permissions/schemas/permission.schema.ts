@@ -19,6 +19,9 @@ export class Permission {
 
   @Prop({ type: Types.ObjectId, ref: 'User', required: true })
   grantedBy!: Types.ObjectId;
+
+  createdAt!: Date;
+  updatedAt!: Date;
 }
 
 export const PermissionSchema = SchemaFactory.createForClass(Permission);

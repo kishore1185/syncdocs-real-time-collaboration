@@ -140,5 +140,48 @@
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
+    /* Prevent unwanted blinking carets on UI click */
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* Re-enable text selection where appropriate */
+  input, textarea, select, [contenteditable="true"], .ProseMirror, .allow-select {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  .ProseMirror {
+    outline: none;
+  }
+  
+  .ProseMirror p {
+    margin-top: 1em;
+    margin-bottom: 1em;
+    line-height: 1.6;
+  }
+  
+  .ProseMirror h1 {
+    font-size: 2.25em;
+    font-weight: 700;
+    margin-top: 1.5em;
+    margin-bottom: 0.5em;
+    line-height: 1.2;
+  }
+  
+  .ProseMirror h2 {
+    font-size: 1.5em;
+    font-weight: 600;
+    margin-top: 1.5em;
+    margin-bottom: 0.5em;
+    line-height: 1.3;
+  }
+  
+  .ProseMirror h3 {
+    font-size: 1.25em;
+    font-weight: 600;
+    margin-top: 1.5em;
+    margin-bottom: 0.5em;
+    line-height: 1.4;
   }
 }

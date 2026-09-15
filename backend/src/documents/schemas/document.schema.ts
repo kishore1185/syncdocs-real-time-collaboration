@@ -17,6 +17,9 @@ export class DocumentEntity {
 
   @Prop({ type: Date, default: null })
   lastSavedAt!: Date | null;
+
+  createdAt!: Date;
+  updatedAt!: Date;
 }
 
 export const DocumentEntitySchema = SchemaFactory.createForClass(DocumentEntity);

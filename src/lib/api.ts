@@ -3,7 +3,7 @@
  * The base URL is configurable so the same build works against any host.
  */
 export const API_BASE =
-  (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") ??
+  (import.meta.env['VITE_API_URL'] as string | undefined)?.replace(/\/$/, "") ??
   "http://localhost:4000/api";
 
 const TOKEN_KEY = "syncdocs.token";
