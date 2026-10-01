@@ -332,7 +332,7 @@ function DocumentWorkspace() {
           )}
         </main>
 
-        <AiAssistantPanel isOpen={isAiPanelOpen} onClose={() => setIsAiPanelOpen(false)} />
+        <AiAssistantPanel isOpen={isAiPanelOpen} onClose={() => setIsAiPanelOpen(false)} editor={editor} />
       </div>
 
       {/* Lock/Unlock Modal */}

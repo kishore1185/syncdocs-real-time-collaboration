@@ -10,6 +10,7 @@ import { PermissionsModule } from './permissions/permissions.module';
 import { ActivityLogsModule } from './activity-logs/activity-logs.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { ImagesModule } from './images/images.module';
+import { AiModule } from './ai/ai.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 
 @Module({
@@ -30,6 +31,7 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     ActivityLogsModule,
     NotificationsModule,
     ImagesModule,
+    AiModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: JwtAuthGuard }],
 })

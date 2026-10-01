@@ -9,7 +9,31 @@ import { LineHeight } from './extensions/LineHeight';
 import { ParagraphSpacing } from './extensions/ParagraphSpacing';
 import { Highlight } from './extensions/Highlight';
 import { ResizableImage } from './extensions/ResizableImage';
+import { Table } from '@tiptap/extension-table';
+import { TableRow as TiptapTableRow } from '@tiptap/extension-table-row';
+import { TableCell } from '@tiptap/extension-table-cell';
+import { TableHeader } from '@tiptap/extension-table-header';
+import { TableInteractions } from './extensions/TableInteractions';
 import { useEffect } from 'react';
+
+const TableRow = TiptapTableRow.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      height: {
+        default: null,
+        parseHTML: element => element.style.height || null,
+        renderHTML: attributes => {
+          if (!attributes['height']) {
+            return {};
+          }
+          return { style: `height: ${attributes['height']}` };
+        },
+      },
+    };
+  },
+});
+
 
 export interface DocumentEditorProps {
   initialContent: string;
@@ -35,6 +59,17 @@ export function DocumentEditor({ initialContent, isLocked, lockedBy, pageBorder,
       ParagraphSpacing,
       Highlight,
       ResizableImage,
+      TableInteractions,
+      Table.configure({
+        resizable: true,
+        HTMLAttributes: {
+          class: 'prose-table',
+          draggable: true,
+        },
+      }),
+      TableRow,
+      TableHeader,
+      TableCell,
     ],
     content: initialContent,
     editable: !isLocked,

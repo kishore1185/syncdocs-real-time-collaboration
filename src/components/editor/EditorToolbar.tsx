@@ -9,11 +9,13 @@ import {
   AlignRight,
   AlignJustify,
   Image as ImageIcon,
-  Bot
+  Bot,
+  Table as TableIcon,
+  ChevronDown,
+  Check
 } from 'lucide-react';
 import * as Select from '@radix-ui/react-select';
 import * as Popover from '@radix-ui/react-popover';
-import { ChevronDown, Check } from 'lucide-react';
 import React from 'react';
 
 export interface EditorToolbarProps {
@@ -338,6 +340,49 @@ export function EditorToolbar({ editor, documentId, pageBorder, onUpdatePageBord
                 </button>
               );
             })}
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
+
+      <div className="mx-2 h-6 w-px bg-zinc-200 dark:bg-zinc-700" />
+
+      {/* Table Controls */}
+      <Popover.Root>
+        <Popover.Trigger className="flex h-8 items-center justify-between gap-1 rounded border border-zinc-200 bg-zinc-50 px-2 text-xs text-zinc-700 transition-colors hover:bg-zinc-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700">
+          <TableIcon className="h-4 w-4" />
+          <ChevronDown className="h-3 w-3 opacity-50" />
+        </Popover.Trigger>
+        <Popover.Portal>
+          <Popover.Content className="z-50 w-48 rounded-md border border-zinc-200 bg-white shadow-md outline-none dark:border-zinc-700 dark:bg-zinc-800 py-1 flex flex-col" align="start" sideOffset={4}>
+            {!editor.isActive('table') ? (
+              <button
+                onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
+                className="relative flex w-full cursor-pointer select-none items-center py-1.5 px-3 text-xs outline-none transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-700 dark:hover:text-zinc-50"
+              >
+                Insert Table (3x3)
+              </button>
+            ) : (
+              <>
+                <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Rows</div>
+                <button onClick={() => editor.chain().focus().addRowBefore().run()} className="relative flex w-full cursor-pointer select-none items-center py-1.5 px-3 text-xs outline-none transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-700 dark:hover:text-zinc-50">Add Row Above</button>
+                <button onClick={() => editor.chain().focus().addRowAfter().run()} className="relative flex w-full cursor-pointer select-none items-center py-1.5 px-3 text-xs outline-none transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-700 dark:hover:text-zinc-50">Add Row Below</button>
+                <button onClick={() => editor.chain().focus().deleteRow().run()} className="relative flex w-full cursor-pointer select-none items-center py-1.5 px-3 text-xs outline-none transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400 text-red-500">Delete Row</button>
+                
+                <div className="my-1 h-px w-full bg-zinc-200 dark:bg-zinc-700" />
+                
+                <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Columns</div>
+                <button onClick={() => editor.chain().focus().addColumnBefore().run()} className="relative flex w-full cursor-pointer select-none items-center py-1.5 px-3 text-xs outline-none transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-700 dark:hover:text-zinc-50">Add Column Before</button>
+                <button onClick={() => editor.chain().focus().addColumnAfter().run()} className="relative flex w-full cursor-pointer select-none items-center py-1.5 px-3 text-xs outline-none transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-700 dark:hover:text-zinc-50">Add Column After</button>
+                <button onClick={() => editor.chain().focus().deleteColumn().run()} className="relative flex w-full cursor-pointer select-none items-center py-1.5 px-3 text-xs outline-none transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400 text-red-500">Delete Column</button>
+                
+                <div className="my-1 h-px w-full bg-zinc-200 dark:bg-zinc-700" />
+                
+                <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Cells</div>
+                <button onClick={() => editor.chain().focus().mergeCells().run()} className="relative flex w-full cursor-pointer select-none items-center py-1.5 px-3 text-xs outline-none transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-700 dark:hover:text-zinc-50">Merge Cells</button>
+                <button onClick={() => editor.chain().focus().splitCell().run()} className="relative flex w-full cursor-pointer select-none items-center py-1.5 px-3 text-xs outline-none transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-700 dark:hover:text-zinc-50">Split Cell</button>
+                <button onClick={() => editor.chain().focus().deleteTable().run()} className="relative flex w-full cursor-pointer select-none items-center py-1.5 px-3 text-xs outline-none transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400 text-red-500 mt-1 border-t border-zinc-100 dark:border-zinc-800 pt-2">Delete Table</button>
+              </>
+            )}
           </Popover.Content>
         </Popover.Portal>
       </Popover.Root>
