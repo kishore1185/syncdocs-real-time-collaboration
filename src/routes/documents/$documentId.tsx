@@ -11,6 +11,7 @@ import { Editor } from '@tiptap/react';
 import { DocumentEditor } from "../../components/editor/DocumentEditor";
 import { EditorToolbar } from "../../components/editor/EditorToolbar";
 import { AiAssistantPanel } from "../../components/editor/AiAssistantPanel";
+import { useCollaboration } from "../../hooks/useCollaboration";
 
 export const Route = createFileRoute("/documents/$documentId")({
   component: DocumentWorkspace,
@@ -31,6 +32,12 @@ function DocumentWorkspace() {
   const [isAiPanelOpen, setIsAiPanelOpen] = useState(false);
   
   const [saveStatus, setSaveStatus] = useState<"saving" | "saved">("saved");
+
+  // Phase 1: WebSocket collaboration foundation
+  const { status: collabStatus, lastTestMessage, sendTestMessage } = useCollaboration({
+    documentId: docData ? documentId : null,
+    pageId: activePageId,
+  });
   
   // Locking state
   const [isLockModalOpen, setIsLockModalOpen] = useState(false);
@@ -205,6 +212,17 @@ function DocumentWorkspace() {
               </span>
               <span className="text-[10px] text-zinc-400">
                 {saveStatus === 'saving' ? 'Saving...' : 'Saved'}
+              </span>
+              <span className={`text-[10px] font-medium ${
+                collabStatus === 'connected' ? 'text-emerald-500' :
+                collabStatus === 'connecting' ? 'text-amber-500' :
+                collabStatus === 'error' ? 'text-red-500' :
+                'text-zinc-400'
+              }`}>
+                {collabStatus === 'connected' ? '● Live' :
+                 collabStatus === 'connecting' ? '◌ Connecting...' :
+                 collabStatus === 'error' ? '✕ Error' :
+                 collabStatus === 'disconnected' ? '○ Disconnected' : ''}
               </span>
             </div>
           </div>
