@@ -216,4 +216,10 @@ export const api = {
       return res.json();
     });
   },
+
+  aiChat: (messages: { role: string; content: string }[], context?: string) =>
+    request<{ result: string }>("/ai/chat", {
+      method: "POST",
+      body: JSON.stringify({ messages, context }),
+    }),
 };
