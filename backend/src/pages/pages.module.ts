@@ -7,6 +7,7 @@ import { PagesController } from './pages.controller';
 import { PermissionsModule } from '../permissions/permissions.module';
 import { ActivityLogsModule } from '../activity-logs/activity-logs.module';
 import { UsersModule } from '../users/users.module';
+import { CollaborationModule } from '../collaboration/collaboration.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { UsersModule } from '../users/users.module';
     PermissionsModule,
     ActivityLogsModule,
     UsersModule,
+    CollaborationModule,
   ],
   controllers: [PagesController],
   providers: [PagesService],

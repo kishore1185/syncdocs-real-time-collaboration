@@ -18,5 +18,6 @@ import { CollaborationGateway } from './collaboration.gateway';
     }),
   ],
   providers: [CollaborationGateway],
+  exports: [CollaborationGateway],
 })
 export class CollaborationModule {}

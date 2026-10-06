@@ -14,6 +14,7 @@ import { Page, PageDocument } from './schemas/page.schema';
 import { ActivityLogsService } from '../activity-logs/activity-logs.service';
 import { UsersService } from '../users/users.service';
 import { DocumentEntity, DocumentEntityDocument } from '../documents/schemas/document.schema';
+import { CollaborationGateway } from '../collaboration/collaboration.gateway';
 
 const LOCK_SALT_ROUNDS = 10;
 /** Quiet period before a page edit is flushed to MongoDB. */
@@ -68,6 +69,7 @@ export class PagesService implements OnModuleDestroy {
     @InjectModel(DocumentEntity.name) private readonly documentModel: Model<DocumentEntityDocument>,
     private readonly activityLogs: ActivityLogsService,
     private readonly usersService: UsersService,
+    private readonly collaborationGateway: CollaborationGateway,
   ) {}
 
   // ---------------------------------------------------------------- CRUD
@@ -104,7 +106,9 @@ export class PagesService implements OnModuleDestroy {
           action: 'PAGE_CREATED',
           details: `Added page ${pageNumber}`,
         });
-        return (await this.toViews([page]))[0];
+        const view = (await this.toViews([page]))[0];
+        this.collaborationGateway.broadcastDocumentSystemEvent(documentId, 'page-created', { page: view }, userId);
+        return view;
       } catch (error) {
         if ((error as { code?: number }).code !== 11000) throw error;
       }

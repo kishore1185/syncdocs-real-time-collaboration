@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { tokenStore } from '../lib/api';
+import * as Y from 'yjs';
+import * as syncProtocol from 'y-protocols/sync';
+import * as encoding from 'lib0/encoding';
+import * as decoding from 'lib0/decoding';
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -31,6 +35,7 @@ interface UseCollaborationOptions {
 export function useCollaboration({ documentId, pageId }: UseCollaborationOptions) {
   const [status, setStatus] = useState<CollaborationStatus>('idle');
   const [lastTestMessage, setLastTestMessage] = useState<CollaborationTestMessage | null>(null);
+  const [ydocState, setYdocState] = useState<{ doc: Y.Doc, pageId: string } | null>(null);
 
   // Use refs to track the exact socket instance and prevent StrictMode duplicates
   const wsRef = useRef<WebSocket | null>(null);
@@ -53,6 +58,7 @@ export function useCollaboration({ documentId, pageId }: UseCollaborationOptions
     // Guard: don't connect without required values
     if (!documentId || !pageId) {
       setStatus('idle');
+      setYdocState(null);
       return;
     }
 
@@ -75,7 +81,21 @@ export function useCollaboration({ documentId, pageId }: UseCollaborationOptions
     setStatus('connecting');
 
     const ws = new WebSocket(wsUrl);
+    ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
+
+    const doc = new Y.Doc();
+    setYdocState({ doc, pageId });
+
+    const handleUpdate = (update: Uint8Array, origin: any) => {
+      if (origin !== 'websocket' && ws.readyState === WebSocket.OPEN) {
+        const encoder = encoding.createEncoder();
+        encoding.writeVarUint(encoder, 0); // message type 0 for sync
+        syncProtocol.writeUpdate(encoder, update);
+        ws.send(encoding.toUint8Array(encoder));
+      }
+    };
+    doc.on('update', handleUpdate);
 
     ws.onopen = () => {
       // If cleanup was already called (StrictMode unmounted us), close immediately
@@ -85,18 +105,46 @@ export function useCollaboration({ documentId, pageId }: UseCollaborationOptions
       }
       console.log(`[COLLAB] Connected: doc=${documentId} page=${pageId}`);
       setStatus('connected');
+
+      // Request initial state from peers (SyncStep1)
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, 0); // message type 0 for sync
+      syncProtocol.writeSyncStep1(encoder, doc);
+      ws.send(encoding.toUint8Array(encoder));
     };
 
     ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data as string);
-        if (msg.type === 'collaboration:test') {
-          const payload = msg.payload as CollaborationTestMessage;
-          console.log(`[COLLAB] Test message from ${payload.from}: "${payload.message}"`);
-          setLastTestMessage(payload);
+      if (event.data instanceof ArrayBuffer) {
+        // Binary message (Yjs sync)
+        const decoder = decoding.createDecoder(new Uint8Array(event.data));
+        const messageType = decoding.readVarUint(decoder);
+        
+        if (messageType === 0) {
+          const encoder = encoding.createEncoder();
+          encoding.writeVarUint(encoder, 0);
+          
+          const syncMessageType = syncProtocol.readSyncMessage(decoder, encoder, doc, 'websocket');
+          
+          // If we received SyncStep1, readSyncMessage wrote SyncStep2 to our encoder.
+          // We need to send it back.
+          if (syncMessageType === syncProtocol.messageYjsSyncStep1 && encoding.length(encoder) > 1) {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(encoding.toUint8Array(encoder));
+            }
+          }
         }
-      } catch (err) {
-        console.warn('[COLLAB] Failed to parse message:', err);
+      } else {
+        // Text message
+        try {
+          const msg = JSON.parse(event.data as string);
+          if (msg.type === 'collaboration:test') {
+            const payload = msg.payload as CollaborationTestMessage;
+            console.log(`[COLLAB] Test message from ${payload.from}: "${payload.message}"`);
+            setLastTestMessage(payload);
+          }
+        } catch (err) {
+          console.warn('[COLLAB] Failed to parse message:', err);
+        }
       }
     };
 
@@ -118,6 +166,8 @@ export function useCollaboration({ documentId, pageId }: UseCollaborationOptions
     return () => {
       cleanupCalledRef.current = true;
       console.log(`[COLLAB] Cleanup: closing socket for doc=${documentId} page=${pageId}`);
+      doc.off('update', handleUpdate);
+      doc.destroy();
       ws.close();
       wsRef.current = null;
     };
@@ -127,5 +177,7 @@ export function useCollaboration({ documentId, pageId }: UseCollaborationOptions
     status,
     lastTestMessage,
     sendTestMessage,
+    ydoc: ydocState?.pageId === pageId ? ydocState.doc : null,
   };
 }
+

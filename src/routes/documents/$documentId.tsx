@@ -12,6 +12,7 @@ import { DocumentEditor } from "../../components/editor/DocumentEditor";
 import { EditorToolbar } from "../../components/editor/EditorToolbar";
 import { AiAssistantPanel } from "../../components/editor/AiAssistantPanel";
 import { useCollaboration } from "../../hooks/useCollaboration";
+import { useDocumentSystem } from "../../hooks/useDocumentSystem";
 
 export const Route = createFileRoute("/documents/$documentId")({
   component: DocumentWorkspace,
@@ -34,10 +35,20 @@ function DocumentWorkspace() {
   const [saveStatus, setSaveStatus] = useState<"saving" | "saved">("saved");
 
   // Phase 1: WebSocket collaboration foundation
-  const { status: collabStatus, lastTestMessage, sendTestMessage } = useCollaboration({
+  const { status: collabStatus, lastTestMessage, sendTestMessage, ydoc } = useCollaboration({
     documentId: docData ? documentId : null,
     pageId: activePageId,
   });
+
+  // System events (page structure)
+  useDocumentSystem(docData ? documentId : null, useCallback((msg: any) => {
+    if (msg.type === 'page-created' && msg.payload?.page) {
+      setPages(prev => {
+        if (prev.some(p => p.id === msg.payload.page.id)) return prev;
+        return [...prev, msg.payload.page];
+      });
+    }
+  }, []));
   
   // Locking state
   const [isLockModalOpen, setIsLockModalOpen] = useState(false);
@@ -332,10 +343,11 @@ function DocumentWorkspace() {
 
         {/* Editor Canvas Area */}
         <main className="flex-1 overflow-y-auto bg-[#f8f9fa] dark:bg-black p-8 md:p-12 relative flex justify-center">
-          {activePage ? (
+          {activePage && ydoc ? (
             <DocumentEditor 
               key={activePage.id} // Forces remount on page switch to ensure independent state
               initialContent={activePage.content}
+              ydoc={ydoc}
               isLocked={activePage.isLocked}
               lockedBy={activePage.lockedBy?.fullName || null}
               pageBorder={{ style: activePage.borderStyle, width: activePage.borderWidth, color: activePage.borderColor }}

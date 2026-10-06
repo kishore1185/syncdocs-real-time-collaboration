@@ -1,4 +1,6 @@
 import { useEditor, EditorContent, Editor } from '@tiptap/react';
+import Collaboration from '@tiptap/extension-collaboration';
+import * as Y from 'yjs';
 import { StarterKit } from '@tiptap/starter-kit';
 import { TextStyle } from '@tiptap/extension-text-style';
 import { FontFamily } from '@tiptap/extension-font-family';
@@ -9,7 +11,30 @@ import { LineHeight } from './extensions/LineHeight';
 import { ParagraphSpacing } from './extensions/ParagraphSpacing';
 import { Highlight } from './extensions/Highlight';
 import { ResizableImage } from './extensions/ResizableImage';
+import { Table } from '@tiptap/extension-table';
+import { TableRow as TiptapTableRow } from '@tiptap/extension-table-row';
+import { TableCell } from '@tiptap/extension-table-cell';
+import { TableHeader } from '@tiptap/extension-table-header';
+import { TableInteractions } from './extensions/TableInteractions';
 import { useEffect } from 'react';
+
+const TableRow = TiptapTableRow.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      height: {
+        default: null,
+        parseHTML: element => element.style.height || null,
+        renderHTML: attributes => {
+          if (!attributes['height']) {
+            return {};
+          }
+          return { style: `height: ${attributes['height']}` };
+        },
+      },
+    };
+  },
+});
 
 export interface DocumentEditorProps {
   initialContent: string;
@@ -18,9 +43,10 @@ export interface DocumentEditorProps {
   pageBorder?: { style: string; width: string; color: string } | null;
   onChange: (content: string) => void;
   onEditorReady: (editor: Editor) => void;
+  ydoc: Y.Doc;
 }
 
-export function DocumentEditor({ initialContent, isLocked, lockedBy, pageBorder, onChange, onEditorReady }: DocumentEditorProps) {
+export function DocumentEditor({ initialContent, isLocked, lockedBy, pageBorder, onChange, onEditorReady, ydoc }: DocumentEditorProps) {
   const editor = useEditor({
     extensions: [
       StarterKit,
@@ -35,8 +61,23 @@ export function DocumentEditor({ initialContent, isLocked, lockedBy, pageBorder,
       ParagraphSpacing,
       Highlight,
       ResizableImage,
+      TableInteractions,
+      Table.configure({
+        resizable: true,
+        HTMLAttributes: {
+          class: 'prose-table',
+          draggable: true,
+        },
+      }),
+      TableRow,
+      TableHeader,
+      TableCell,
+      Collaboration.configure({
+        document: ydoc,
+      }),
     ],
-    content: initialContent,
+    // Let Tiptap Collaboration seed the initial document state if the YDoc is completely empty
+    ...(ydoc.share.size === 0 ? { content: initialContent } : {}),
     editable: !isLocked,
     onUpdate: ({ editor }) => {
       onChange(editor.getHTML());

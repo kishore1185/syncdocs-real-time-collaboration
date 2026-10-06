@@ -108,7 +108,7 @@ export class DocumentsService {
   }
 
   /**
-   * Joining by Room ID grants viewer access if the user has none yet.
+   * Joining by Room ID grants editor access if the user has none yet.
    * Existing roles (editor/owner) are never downgraded.
    */
   async joinByRoomId(roomId: string, userId: string): Promise<DocumentView> {
@@ -116,7 +116,7 @@ export class DocumentsService {
     const existing = await this.permissions.roleFor(doc._id, userId);
     if (!existing) {
       const uid = new Types.ObjectId(userId);
-      await this.permissions.grant(doc._id, uid, 'viewer', doc.ownerId);
+      await this.permissions.grant(doc._id, uid, 'editor', doc.ownerId);
       void this.activityLogs.record({
         documentId: doc._id,
         userId,
@@ -128,10 +128,10 @@ export class DocumentsService {
         userId: doc.ownerId,
         documentId: doc._id,
         type: 'COLLABORATOR_JOINED',
-        message: `${joiner?.fullName ?? 'A collaborator'} joined "${doc.title}" as a viewer.`,
+        message: `${joiner?.fullName ?? 'A collaborator'} joined "${doc.title}" as an editor.`,
       });
     }
-    return (await this.toViews([doc], new Map([[doc._id.toString(), existing ?? 'viewer']])))[0];
+    return (await this.toViews([doc], new Map([[doc._id.toString(), existing ?? 'editor']])))[0];
   }
 
 

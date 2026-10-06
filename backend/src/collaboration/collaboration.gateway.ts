@@ -170,7 +170,12 @@ export class CollaborationGateway implements OnModuleInit, OnModuleDestroy {
     });
 
     // Message handling
-    sock.on('message', (data) => {
+    sock.on('message', (data, isBinary) => {
+      if (isBinary) {
+        // Forward Yjs binary sync messages to other clients in the room
+        this.broadcastBinaryToRoom(sock.roomId, sock, data);
+        return;
+      }
       try {
         const msg = JSON.parse(data.toString());
         this.handleMessage(sock, msg);
@@ -239,7 +244,7 @@ export class CollaborationGateway implements OnModuleInit, OnModuleDestroy {
 
   private broadcastToRoom(
     roomId: string,
-    sender: AuthenticatedSocket,
+    sender: AuthenticatedSocket | null,
     data: unknown,
   ) {
     const room = this.rooms.get(roomId);
@@ -249,7 +254,7 @@ export class CollaborationGateway implements OnModuleInit, OnModuleDestroy {
     let sent = 0;
 
     for (const sock of room) {
-      if (sock === sender) continue; // exclude sender
+      if (sender && sock === sender) continue; // exclude sender if provided
       if (sock.readyState === WebSocket.OPEN) {
         sock.send(json);
         sent++;
@@ -257,5 +262,37 @@ export class CollaborationGateway implements OnModuleInit, OnModuleDestroy {
     }
 
     this.log.debug(`Broadcast in ${roomId}: sent to ${sent} peer(s)`);
+  }
+
+  public broadcastDocumentSystemEvent(documentId: string, type: string, payload: any, excludeUserId?: string) {
+    const roomId = `${documentId}:system`;
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+
+    const json = JSON.stringify({ type, payload });
+    for (const sock of room) {
+      if (excludeUserId && sock.userId === excludeUserId) continue;
+      if (sock.readyState === WebSocket.OPEN) {
+        sock.send(json);
+      }
+    }
+  }
+
+  private broadcastBinaryToRoom(
+    roomId: string,
+    sender: AuthenticatedSocket,
+    data: WebSocket.RawData,
+  ) {
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+
+    let sent = 0;
+    for (const sock of room) {
+      if (sock === sender) continue;
+      if (sock.readyState === WebSocket.OPEN) {
+        sock.send(data, { binary: true });
+        sent++;
+      }
+    }
   }
 }
