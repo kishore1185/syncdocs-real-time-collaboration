@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useParams } from "@tanstack/react-router";
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { api, type OpenDocumentPayload, type PageView } from "../../lib/api";
 import { useRequireAuth } from "../../lib/auth";
 import { Hexagon, Share2, ChevronLeft, FilePlus, Users, Lock, Unlock, X } from "lucide-react";
@@ -35,10 +35,110 @@ function DocumentWorkspace() {
   const [saveStatus, setSaveStatus] = useState<"saving" | "saved">("saved");
 
   // Phase 1: WebSocket collaboration foundation
-  const { status: collabStatus, lastTestMessage, sendTestMessage, ydoc } = useCollaboration({
+  const { status: collabStatus, lastTestMessage, sendTestMessage, ydoc, awareness } = useCollaboration({
     documentId: docData ? documentId : null,
     pageId: activePageId,
   });
+
+  const [participants, setParticipants] = useState<any[]>([]);
+  const knownUsersRef = useRef<Map<string, string>>(new Map());
+  const pendingToastsRef = useRef<Map<string, { type: 'join'|'leave', name: string, timeout: NodeJS.Timeout }>>(new Map());
+  const sessionJoinedAt = useMemo(() => Date.now(), []);
+  const globalSeenUsersRef = useRef<Map<string, number>>(new Map());
+  const lastKnownUserStatesRef = useRef<Map<string, any>>(new Map());
+
+  useEffect(() => {
+    // When navigating to a new page, clear the page-specific tracked users
+    // so we don't accidentally fire "leave" toasts for them locally.
+    knownUsersRef.current.clear();
+    pendingToastsRef.current.forEach(t => clearTimeout(t.timeout));
+    pendingToastsRef.current.clear();
+  }, [activePageId]);
+
+  const currentUserColor = useMemo(() => {
+    const colors = ['#f783ac', '#845ef7', '#3bc9db', '#20c997', '#ffc078', '#ff8787', '#4dabf7'];
+    return colors[Math.floor(Math.random() * colors.length)] || '#f783ac';
+  }, []);
+
+  useEffect(() => {
+    if (!awareness || !user || !docData) return;
+
+    awareness.setLocalStateField('user', {
+      id: user.id,
+      name: user.fullName,
+      color: currentUserColor,
+      isOwner: docData.document.owner.id === user.id,
+      sessionJoinedAt,
+      switchingPage: false
+    });
+
+    const updateParticipants = () => {
+      const states = Array.from(awareness.getStates().values());
+      const currentUsers = new Map();
+      
+      states.forEach((state: any) => {
+        if (state.user) {
+          currentUsers.set(state.user.id, state.user);
+          lastKnownUserStatesRef.current.set(state.user.id, state.user);
+        }
+      });
+
+      const currentUsersList = Array.from(currentUsers.values());
+      
+      // Check for leaves
+      knownUsersRef.current.forEach((name, id) => {
+        if (!currentUsers.has(id) && id !== user.id) {
+          const pending = pendingToastsRef.current.get(id);
+          if (pending && pending.type === 'join') {
+            clearTimeout(pending.timeout);
+            pendingToastsRef.current.delete(id);
+          } else if (!pending) {
+            const timeout = setTimeout(() => {
+              const lastState = lastKnownUserStatesRef.current.get(id);
+              if (!lastState?.switchingPage) {
+                toast(`${name} left the document collaboration`);
+              }
+              pendingToastsRef.current.delete(id);
+              knownUsersRef.current.delete(id);
+              // Do NOT delete from globalSeenUsersRef so if they return in the same session, we know.
+            }, 500);
+            pendingToastsRef.current.set(id, { type: 'leave', name, timeout });
+          }
+        }
+      });
+
+      // Check for joins
+      currentUsersList.forEach(u => {
+        if (!knownUsersRef.current.has(u.id) && u.id !== user.id) {
+          const pending = pendingToastsRef.current.get(u.id);
+          if (pending && pending.type === 'leave') {
+            clearTimeout(pending.timeout);
+            pendingToastsRef.current.delete(u.id);
+          } else if (!pending) {
+            const timeout = setTimeout(() => {
+              const lastSeenSession = globalSeenUsersRef.current.get(u.id);
+              if (lastSeenSession !== u.sessionJoinedAt) {
+                toast(`${u.name} joined the document collaboration`);
+                globalSeenUsersRef.current.set(u.id, u.sessionJoinedAt);
+              }
+              pendingToastsRef.current.delete(u.id);
+              knownUsersRef.current.set(u.id, u.name);
+            }, 500);
+            pendingToastsRef.current.set(u.id, { type: 'join', name: u.name, timeout });
+          }
+        }
+      });
+
+      setParticipants(currentUsersList);
+    };
+
+    updateParticipants();
+    awareness.on('change', updateParticipants);
+
+    return () => {
+      awareness.off('change', updateParticipants);
+    };
+  }, [awareness, user, docData, currentUserColor, sessionJoinedAt]);
 
   // System events (page structure)
   useDocumentSystem(docData ? documentId : null, useCallback((msg: any) => {
@@ -82,8 +182,18 @@ function DocumentWorkspace() {
     }
   }, [user, documentId]);
 
+  const markSwitchingPage = () => {
+    if (awareness) {
+      const currentUserState = awareness.getLocalState()?.['user'];
+      if (currentUserState) {
+        awareness.setLocalStateField('user', { ...currentUserState, switchingPage: true });
+      }
+    }
+  };
+
   const handleAddPage = async () => {
     try {
+      markSwitchingPage();
       const newPage = await api.addPage(documentId);
       setPages(prev => [...prev, newPage]);
       setActivePageId(newPage.id);
@@ -247,7 +357,7 @@ function DocumentWorkspace() {
                 className="mr-2 flex items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700/50"
               >
                 <Users className="h-4 w-4" />
-                <span>1</span>
+                <span>{participants.length || 1}</span>
               </button>
             </Popover.Trigger>
             <Popover.Portal>
@@ -258,16 +368,20 @@ function DocumentWorkspace() {
               >
                 <div className="px-2 py-1.5 flex justify-between items-center border-b border-zinc-100 dark:border-zinc-800 mb-1">
                   <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Participants</span>
-                  <span className="text-xs font-medium text-zinc-400">1</span>
+                  <span className="text-xs font-medium text-zinc-400">{participants.length || 1}</span>
                 </div>
                 <div className="flex flex-col mt-1">
-                  <div className="flex items-start gap-2 rounded-sm px-2 py-1.5">
-                    <div className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-green-500" />
-                    <div className="flex flex-col">
-                      <span className="text-sm font-medium text-zinc-900 dark:text-white leading-tight mb-0.5">{user.fullName}</span>
-                      <span className="text-xs text-zinc-500 dark:text-zinc-400 capitalize">{document.role}</span>
+                  {(participants.length > 0 ? participants : [{ id: user.id, name: user.fullName, color: currentUserColor, isOwner: docData.document.owner.id === user.id }]).map(p => (
+                    <div key={p.id} className="flex items-start gap-2 rounded-sm px-2 py-1.5">
+                      <div className="mt-1.5 h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: p.color || '#10b981' }} />
+                      <div className="flex flex-col">
+                        <span className="text-sm font-medium text-zinc-900 dark:text-white leading-tight mb-0.5">{p.name}</span>
+                        {p.isOwner && (
+                          <span className="text-xs text-zinc-500 dark:text-zinc-400 capitalize">Owner</span>
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  ))}
                 </div>
               </Popover.Content>
             </Popover.Portal>
@@ -307,7 +421,12 @@ function DocumentWorkspace() {
               return (
                 <div key={page.id} className="relative group">
                   <button
-                    onClick={() => setActivePageId(page.id)}
+                    onClick={() => {
+                      if (activePageId !== page.id) {
+                        markSwitchingPage();
+                        setActivePageId(page.id);
+                      }
+                    }}
                     className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${
                       isActive
                         ? "bg-white text-zinc-900 shadow-sm border border-zinc-200 dark:bg-zinc-800 dark:border-zinc-700 dark:text-white" 
@@ -348,6 +467,8 @@ function DocumentWorkspace() {
               key={activePage.id} // Forces remount on page switch to ensure independent state
               initialContent={activePage.content}
               ydoc={ydoc}
+              awareness={awareness}
+              currentUser={{ name: user.fullName || "Unknown", color: currentUserColor }}
               isLocked={activePage.isLocked}
               lockedBy={activePage.lockedBy?.fullName || null}
               pageBorder={{ style: activePage.borderStyle, width: activePage.borderWidth, color: activePage.borderColor }}

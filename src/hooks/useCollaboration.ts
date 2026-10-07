@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { tokenStore } from '../lib/api';
 import * as Y from 'yjs';
 import * as syncProtocol from 'y-protocols/sync';
+import * as awarenessProtocol from 'y-protocols/awareness';
 import * as encoding from 'lib0/encoding';
 import * as decoding from 'lib0/decoding';
 
@@ -35,7 +36,7 @@ interface UseCollaborationOptions {
 export function useCollaboration({ documentId, pageId }: UseCollaborationOptions) {
   const [status, setStatus] = useState<CollaborationStatus>('idle');
   const [lastTestMessage, setLastTestMessage] = useState<CollaborationTestMessage | null>(null);
-  const [ydocState, setYdocState] = useState<{ doc: Y.Doc, pageId: string } | null>(null);
+  const [ydocState, setYdocState] = useState<{ doc: Y.Doc, awareness: awarenessProtocol.Awareness, pageId: string } | null>(null);
 
   // Use refs to track the exact socket instance and prevent StrictMode duplicates
   const wsRef = useRef<WebSocket | null>(null);
@@ -85,7 +86,8 @@ export function useCollaboration({ documentId, pageId }: UseCollaborationOptions
     wsRef.current = ws;
 
     const doc = new Y.Doc();
-    setYdocState({ doc, pageId });
+    const awareness = new awarenessProtocol.Awareness(doc);
+    setYdocState({ doc, awareness, pageId });
 
     const handleUpdate = (update: Uint8Array, origin: any) => {
       if (origin !== 'websocket' && ws.readyState === WebSocket.OPEN) {
@@ -97,6 +99,25 @@ export function useCollaboration({ documentId, pageId }: UseCollaborationOptions
     };
     doc.on('update', handleUpdate);
 
+    const handleAwarenessUpdate = ({ added, updated, removed }: any, origin: any) => {
+      if (origin !== 'websocket' && ws.readyState === WebSocket.OPEN) {
+        const changedClients = added.concat(updated).concat(removed);
+        const encoder = encoding.createEncoder();
+        encoding.writeVarUint(encoder, 1); // message type 1 for awareness
+        const awarenessUpdate = awarenessProtocol.encodeAwarenessUpdate(awareness, changedClients);
+        encoding.writeVarUint8Array(encoder, awarenessUpdate);
+        ws.send(encoding.toUint8Array(encoder));
+      }
+    };
+    awareness.on('update', handleAwarenessUpdate);
+
+    const handleBeforeUnload = () => {
+      if (ws.readyState === WebSocket.OPEN) {
+        awarenessProtocol.removeAwarenessStates(awareness, [awareness.clientID], 'window unload');
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
     ws.onopen = () => {
       // If cleanup was already called (StrictMode unmounted us), close immediately
       if (cleanupCalledRef.current) {
@@ -107,19 +128,29 @@ export function useCollaboration({ documentId, pageId }: UseCollaborationOptions
       setStatus('connected');
 
       // Request initial state from peers (SyncStep1)
-      const encoder = encoding.createEncoder();
-      encoding.writeVarUint(encoder, 0); // message type 0 for sync
-      syncProtocol.writeSyncStep1(encoder, doc);
-      ws.send(encoding.toUint8Array(encoder));
+      const syncEncoder = encoding.createEncoder();
+      encoding.writeVarUint(syncEncoder, 0); // message type 0 for sync
+      syncProtocol.writeSyncStep1(syncEncoder, doc);
+      ws.send(encoding.toUint8Array(syncEncoder));
+
+      // Broadcast our local awareness state
+      if (awareness.getLocalState() !== null) {
+        const awarenessEncoder = encoding.createEncoder();
+        encoding.writeVarUint(awarenessEncoder, 1);
+        const awarenessUpdate = awarenessProtocol.encodeAwarenessUpdate(awareness, [awareness.clientID]);
+        encoding.writeVarUint8Array(awarenessEncoder, awarenessUpdate);
+        ws.send(encoding.toUint8Array(awarenessEncoder));
+      }
     };
 
     ws.onmessage = (event) => {
       if (event.data instanceof ArrayBuffer) {
-        // Binary message (Yjs sync)
+        // Binary message
         const decoder = decoding.createDecoder(new Uint8Array(event.data));
         const messageType = decoding.readVarUint(decoder);
         
         if (messageType === 0) {
+          // Yjs sync
           const encoder = encoding.createEncoder();
           encoding.writeVarUint(encoder, 0);
           
@@ -127,11 +158,25 @@ export function useCollaboration({ documentId, pageId }: UseCollaborationOptions
           
           // If we received SyncStep1, readSyncMessage wrote SyncStep2 to our encoder.
           // We need to send it back.
-          if (syncMessageType === syncProtocol.messageYjsSyncStep1 && encoding.length(encoder) > 1) {
-            if (ws.readyState === WebSocket.OPEN) {
+          if (syncMessageType === syncProtocol.messageYjsSyncStep1) {
+            if (encoding.length(encoder) > 1 && ws.readyState === WebSocket.OPEN) {
               ws.send(encoding.toUint8Array(encoder));
             }
+            
+            // The peer that sent SyncStep1 just joined. They missed our awareness state.
+            // Send them our local awareness state so they see our cursor/presence immediately.
+            if (awareness.getLocalState() !== null && ws.readyState === WebSocket.OPEN) {
+              const awarenessEncoder = encoding.createEncoder();
+              encoding.writeVarUint(awarenessEncoder, 1); // message type 1 for awareness
+              const awarenessUpdate = awarenessProtocol.encodeAwarenessUpdate(awareness, [awareness.clientID]);
+              encoding.writeVarUint8Array(awarenessEncoder, awarenessUpdate);
+              ws.send(encoding.toUint8Array(awarenessEncoder));
+            }
           }
+        } else if (messageType === 1) {
+          // Awareness
+          const update = decoding.readVarUint8Array(decoder);
+          awarenessProtocol.applyAwarenessUpdate(awareness, update, 'websocket');
         }
       } else {
         // Text message
@@ -166,6 +211,15 @@ export function useCollaboration({ documentId, pageId }: UseCollaborationOptions
     return () => {
       cleanupCalledRef.current = true;
       console.log(`[COLLAB] Cleanup: closing socket for doc=${documentId} page=${pageId}`);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      
+      // Explicitly broadcast our departure to remote clients before closing
+      if (ws.readyState === WebSocket.OPEN) {
+        awarenessProtocol.removeAwarenessStates(awareness, [awareness.clientID], 'window unload');
+      }
+
+      awareness.off('update', handleAwarenessUpdate);
+      awareness.destroy();
       doc.off('update', handleUpdate);
       doc.destroy();
       ws.close();
@@ -178,6 +232,7 @@ export function useCollaboration({ documentId, pageId }: UseCollaborationOptions
     lastTestMessage,
     sendTestMessage,
     ydoc: ydocState?.pageId === pageId ? ydocState.doc : null,
+    awareness: ydocState?.pageId === pageId ? ydocState.awareness : null,
   };
 }
 

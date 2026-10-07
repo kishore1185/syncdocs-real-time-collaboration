@@ -1,5 +1,6 @@
 import { useEditor, EditorContent, Editor } from '@tiptap/react';
 import Collaboration from '@tiptap/extension-collaboration';
+import { CollaborationCursor } from './extensions/CollaborationCursor';
 import * as Y from 'yjs';
 import { StarterKit } from '@tiptap/starter-kit';
 import { TextStyle } from '@tiptap/extension-text-style';
@@ -44,9 +45,11 @@ export interface DocumentEditorProps {
   onChange: (content: string) => void;
   onEditorReady: (editor: Editor) => void;
   ydoc: Y.Doc;
+  awareness: any;
+  currentUser: { name: string; color: string };
 }
 
-export function DocumentEditor({ initialContent, isLocked, lockedBy, pageBorder, onChange, onEditorReady, ydoc }: DocumentEditorProps) {
+export function DocumentEditor({ initialContent, isLocked, lockedBy, pageBorder, onChange, onEditorReady, ydoc, awareness, currentUser }: DocumentEditorProps) {
   const editor = useEditor({
     extensions: [
       StarterKit,
@@ -75,6 +78,12 @@ export function DocumentEditor({ initialContent, isLocked, lockedBy, pageBorder,
       Collaboration.configure({
         document: ydoc,
       }),
+      ...(awareness ? [
+        CollaborationCursor.configure({
+          provider: { awareness },
+          user: currentUser,
+        }),
+      ] : []),
     ],
     // Let Tiptap Collaboration seed the initial document state if the YDoc is completely empty
     ...(ydoc.share.size === 0 ? { content: initialContent } : {}),
