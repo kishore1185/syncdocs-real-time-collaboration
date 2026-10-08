@@ -12,6 +12,7 @@ import { DocumentEditor } from "../../components/editor/DocumentEditor";
 import { EditorToolbar } from "../../components/editor/EditorToolbar";
 import { AiAssistantPanel } from "../../components/editor/AiAssistantPanel";
 import { useCollaboration } from "../../hooks/useCollaboration";
+import * as Y from "yjs";
 import { useDocumentSystem } from "../../hooks/useDocumentSystem";
 
 export const Route = createFileRoute("/documents/$documentId")({
@@ -35,9 +36,10 @@ function DocumentWorkspace() {
   const [saveStatus, setSaveStatus] = useState<"saving" | "saved">("saved");
 
   // Phase 1: WebSocket collaboration foundation
-  const { status: collabStatus, lastTestMessage, sendTestMessage, ydoc, awareness } = useCollaboration({
+  const { status: collabStatus, lastTestMessage, lastPageBorderUpdate, sendTestMessage, sendPageBorderUpdate, ydoc, awareness } = useCollaboration({
     documentId: docData ? documentId : null,
     pageId: activePageId,
+    initialYstateBase64: activePage?.ystateBase64 || null,
   });
 
   const [participants, setParticipants] = useState<any[]>([]);
@@ -140,6 +142,23 @@ function DocumentWorkspace() {
     };
   }, [awareness, user, docData, currentUserColor, sessionJoinedAt]);
 
+  // Handle incoming page border updates from collaborators
+  useEffect(() => {
+    if (lastPageBorderUpdate) {
+      setPages(prev => prev.map(p => {
+        if (p.id === lastPageBorderUpdate.pageId) {
+          return {
+            ...p,
+            borderStyle: lastPageBorderUpdate.borderStyle,
+            borderWidth: lastPageBorderUpdate.borderWidth,
+            borderColor: lastPageBorderUpdate.borderColor,
+          };
+        }
+        return p;
+      }));
+    }
+  }, [lastPageBorderUpdate]);
+
   // System events (page structure)
   useDocumentSystem(docData ? documentId : null, useCallback((msg: any) => {
     if (msg.type === 'page-created' && msg.payload?.page) {
@@ -203,14 +222,15 @@ function DocumentWorkspace() {
     }
   };
 
-  const saveContent = useCallback(async (pageId: string, content: string, border?: { style: string, width: string, color: string }) => {
+  const saveContent = useCallback(async (pageId: string, content: string, ystateBase64?: string, border?: { style: string, width: string, color: string }) => {
     try {
       setSaveStatus("saving");
-      await api.savePage(documentId, pageId, content, border);
+      await api.savePage(documentId, pageId, content, ystateBase64, border);
       
       setPages(prev => prev.map(p => p.id === pageId ? { 
         ...p, 
         content,
+        ...(ystateBase64 ? { ystateBase64 } : {}),
         ...(border ? { borderStyle: border.style, borderWidth: border.width, borderColor: border.color } : {})
       } : p));
       setSaveStatus("saved");
@@ -226,8 +246,23 @@ function DocumentWorkspace() {
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     setSaveStatus("saving");
     
+    let ystateBase64: string | undefined;
+    if (ydoc) {
+      try {
+        const state = Y.encodeStateAsUpdate(ydoc);
+        let binary = '';
+        const len = state.byteLength;
+        for (let i = 0; i < len; i++) {
+          binary += String.fromCharCode(state[i] as number);
+        }
+        ystateBase64 = btoa(binary);
+      } catch (err) {
+        console.error('[COLLAB] Failed to encode Yjs state for saving:', err);
+      }
+    }
+
     saveTimeoutRef.current = setTimeout(() => {
-      saveContent(activePageId, content);
+      saveContent(activePageId, content, ystateBase64);
     }, 1500);
   };
 
@@ -244,9 +279,19 @@ function DocumentWorkspace() {
       borderColor: newBorder.color 
     } : p));
     
+    // Broadcast the update to other collaborators in real-time
+    if (sendPageBorderUpdate) {
+      sendPageBorderUpdate({
+        pageId: activePageId,
+        borderStyle: newBorder.style,
+        borderWidth: newBorder.width,
+        borderColor: newBorder.color,
+      });
+    }
+
     // Save immediately since it's a discrete action
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    saveContent(activePageId, activePage.content, newBorder);
+    saveContent(activePageId, activePage.content, undefined, newBorder);
   };
 
   const handleLockUnlockSubmit = async (e: React.FormEvent) => {

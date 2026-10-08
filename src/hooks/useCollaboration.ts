@@ -24,18 +24,27 @@ interface CollaborationTestMessage {
   timestamp: number;
 }
 
+export interface PageBorderUpdate {
+  pageId: string;
+  borderStyle: string;
+  borderWidth: string;
+  borderColor: string;
+}
+
 interface UseCollaborationOptions {
   documentId: string | null;
   pageId: string | null;
+  initialYstateBase64?: string | null;
 }
 
 /* ------------------------------------------------------------------ */
 /*  Hook                                                               */
 /* ------------------------------------------------------------------ */
 
-export function useCollaboration({ documentId, pageId }: UseCollaborationOptions) {
+export function useCollaboration({ documentId, pageId, initialYstateBase64 }: UseCollaborationOptions) {
   const [status, setStatus] = useState<CollaborationStatus>('idle');
   const [lastTestMessage, setLastTestMessage] = useState<CollaborationTestMessage | null>(null);
+  const [lastPageBorderUpdate, setLastPageBorderUpdate] = useState<PageBorderUpdate | null>(null);
   const [ydocState, setYdocState] = useState<{ doc: Y.Doc, awareness: awarenessProtocol.Awareness, pageId: string } | null>(null);
 
   // Use refs to track the exact socket instance and prevent StrictMode duplicates
@@ -53,6 +62,15 @@ export function useCollaboration({ documentId, pageId }: UseCollaborationOptions
       payload: { message },
     }));
     console.log(`[COLLAB] Sent test message: "${message}"`);
+  }, []);
+
+  const sendPageBorderUpdate = useCallback((payload: PageBorderUpdate) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({
+      type: 'page-border-updated',
+      payload,
+    }));
   }, []);
 
   useEffect(() => {
@@ -86,6 +104,21 @@ export function useCollaboration({ documentId, pageId }: UseCollaborationOptions
     wsRef.current = ws;
 
     const doc = new Y.Doc();
+    
+    if (initialYstateBase64) {
+      try {
+        const binaryString = atob(initialYstateBase64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        Y.applyUpdate(doc, bytes);
+        console.log(`[COLLAB] Restored persisted Yjs state for page=${pageId}`);
+      } catch (err) {
+        console.error('[COLLAB] Failed to restore persisted Yjs state:', err);
+      }
+    }
+
     const awareness = new awarenessProtocol.Awareness(doc);
     setYdocState({ doc, awareness, pageId });
 
@@ -186,6 +219,8 @@ export function useCollaboration({ documentId, pageId }: UseCollaborationOptions
             const payload = msg.payload as CollaborationTestMessage;
             console.log(`[COLLAB] Test message from ${payload.from}: "${payload.message}"`);
             setLastTestMessage(payload);
+          } else if (msg.type === 'page-border-updated') {
+            setLastPageBorderUpdate(msg.payload as PageBorderUpdate);
           }
         } catch (err) {
           console.warn('[COLLAB] Failed to parse message:', err);
@@ -230,7 +265,9 @@ export function useCollaboration({ documentId, pageId }: UseCollaborationOptions
   return {
     status,
     lastTestMessage,
+    lastPageBorderUpdate,
     sendTestMessage,
+    sendPageBorderUpdate,
     ydoc: ydocState?.pageId === pageId ? ydocState.doc : null,
     awareness: ydocState?.pageId === pageId ? ydocState.awareness : null,
   };

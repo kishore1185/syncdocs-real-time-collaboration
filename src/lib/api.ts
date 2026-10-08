@@ -34,6 +34,7 @@ export interface PageView {
   documentId: string;
   pageNumber: number;
   content: string;
+  ystateBase64?: string;
   borderStyle: string;
   borderWidth: string;
   borderColor: string;
@@ -176,10 +177,10 @@ export const api = {
   addPage: (documentId: string) =>
     request<PageView>(`/documents/${documentId}/pages`, { method: "POST" }),
 
-  savePage: (documentId: string, pageId: string, content: string, border?: { style: string, width: string, color: string }) =>
+  savePage: (documentId: string, pageId: string, content: string, ystateBase64?: string, border?: { style: string, width: string, color: string }) =>
     request<{ pageId: string; status: "saving" | "saved"; lastSavedAt: string | null }>(
       `/documents/${documentId}/pages/${pageId}/content`,
-      { method: "PUT", body: JSON.stringify({ content, borderStyle: border?.style, borderWidth: border?.width, borderColor: border?.color }) },
+      { method: "PUT", body: JSON.stringify({ content, ystate: ystateBase64, borderStyle: border?.style, borderWidth: border?.width, borderColor: border?.color }) },
     ),
 
   documentSaveState: (documentId: string) =>

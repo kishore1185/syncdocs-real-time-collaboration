@@ -29,6 +29,7 @@ export interface PageView {
   documentId: string;
   pageNumber: number;
   content: string;
+  ystateBase64?: string;
   borderStyle: string;
   borderWidth: string;
   borderColor: string;
@@ -325,11 +326,13 @@ export class PagesService implements OnModuleDestroy {
     const names = new Map(users.map((u) => [u._id.toString(), u.fullName]));
     return pages.map((p) => {
       const id = p._id.toString();
+      const rawYstate = this.pending.get(id)?.ystate ?? p.ystate;
       return {
         id,
         documentId: p.documentId.toString(),
         pageNumber: p.pageNumber,
         content: this.pending.get(id)?.content ?? p.content,
+        ystateBase64: rawYstate ? rawYstate.toString('base64') : undefined,
         borderStyle: this.pending.get(id)?.borderStyle ?? p.borderStyle,
         borderWidth: this.pending.get(id)?.borderWidth ?? p.borderWidth,
         borderColor: this.pending.get(id)?.borderColor ?? p.borderColor,

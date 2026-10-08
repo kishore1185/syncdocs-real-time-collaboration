@@ -235,6 +235,15 @@ export class CollaborationGateway implements OnModuleInit, OnModuleDestroy {
         break;
       }
 
+      case 'page-border-updated': {
+        // Broadcast to OTHER sockets in the same room
+        this.broadcastToRoom(sender.roomId, sender, {
+          type: 'page-border-updated',
+          payload: msg.payload,
+        });
+        break;
+      }
+
       default:
         this.log.warn(`Unknown message type from ${sender.userId}: ${msg.type}`);
     }
