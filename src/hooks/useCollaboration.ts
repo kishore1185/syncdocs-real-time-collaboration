@@ -88,20 +88,9 @@ export function useCollaboration({ documentId, pageId, initialYstateBase64 }: Us
       return;
     }
 
-    // Prevent duplicate connections from StrictMode re-runs
-    cleanupCalledRef.current = false;
-
-    // Build WebSocket URL
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsHost = 'localhost:4000';
-    const wsUrl = `${wsProtocol}//${wsHost}/collaboration?token=${encodeURIComponent(token)}&documentId=${encodeURIComponent(documentId)}&pageId=${encodeURIComponent(pageId)}`;
-
-    console.log(`[COLLAB] Connecting: doc=${documentId} page=${pageId}`);
-    setStatus('connecting');
-
-    const ws = new WebSocket(wsUrl);
-    ws.binaryType = 'arraybuffer';
-    wsRef.current = ws;
+    let isCleanedUp = false;
+    let reconnectTimer: NodeJS.Timeout | null = null;
+    let currentSocket: WebSocket | null = null;
 
     const doc = new Y.Doc();
     
@@ -122,143 +111,170 @@ export function useCollaboration({ documentId, pageId, initialYstateBase64 }: Us
     const awareness = new awarenessProtocol.Awareness(doc);
     setYdocState({ doc, awareness, pageId });
 
-    const handleUpdate = (update: Uint8Array, origin: any) => {
-      if (origin !== 'websocket' && ws.readyState === WebSocket.OPEN) {
-        const encoder = encoding.createEncoder();
-        encoding.writeVarUint(encoder, 0); // message type 0 for sync
-        syncProtocol.writeUpdate(encoder, update);
-        ws.send(encoding.toUint8Array(encoder));
-      }
-    };
-    doc.on('update', handleUpdate);
-
-    const handleAwarenessUpdate = ({ added, updated, removed }: any, origin: any) => {
-      if (origin !== 'websocket' && ws.readyState === WebSocket.OPEN) {
-        const changedClients = added.concat(updated).concat(removed);
-        const encoder = encoding.createEncoder();
-        encoding.writeVarUint(encoder, 1); // message type 1 for awareness
-        const awarenessUpdate = awarenessProtocol.encodeAwarenessUpdate(awareness, changedClients);
-        encoding.writeVarUint8Array(encoder, awarenessUpdate);
-        ws.send(encoding.toUint8Array(encoder));
-      }
-    };
-    awareness.on('update', handleAwarenessUpdate);
+    let activeUpdateHandler: ((update: Uint8Array, origin: any) => void) | null = null;
+    let activeAwarenessHandler: (({ added, updated, removed }: any, origin: any) => void) | null = null;
 
     const handleBeforeUnload = () => {
-      if (ws.readyState === WebSocket.OPEN) {
+      if (currentSocket && currentSocket.readyState === WebSocket.OPEN) {
         awarenessProtocol.removeAwarenessStates(awareness, [awareness.clientID], 'window unload');
       }
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
 
-    ws.onopen = () => {
-      // If cleanup was already called (StrictMode unmounted us), close immediately
-      if (cleanupCalledRef.current) {
-        ws.close();
-        return;
-      }
-      console.log(`[COLLAB] Connected: doc=${documentId} page=${pageId}`);
-      setStatus('connected');
+    const connect = () => {
+      if (isCleanedUp) return;
 
-      // Request initial state from peers (SyncStep1)
-      const syncEncoder = encoding.createEncoder();
-      encoding.writeVarUint(syncEncoder, 0); // message type 0 for sync
-      syncProtocol.writeSyncStep1(syncEncoder, doc);
-      ws.send(encoding.toUint8Array(syncEncoder));
+      console.log(`[COLLAB] Connecting: doc=${documentId} page=${pageId}`);
+      setStatus('connecting');
 
-      // Broadcast our local awareness state
-      if (awareness.getLocalState() !== null) {
-        const awarenessEncoder = encoding.createEncoder();
-        encoding.writeVarUint(awarenessEncoder, 1);
-        const awarenessUpdate = awarenessProtocol.encodeAwarenessUpdate(awareness, [awareness.clientID]);
-        encoding.writeVarUint8Array(awarenessEncoder, awarenessUpdate);
-        ws.send(encoding.toUint8Array(awarenessEncoder));
-      }
-    };
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsHost = 'localhost:4000';
+      const wsUrl = `${wsProtocol}//${wsHost}/collaboration?token=${encodeURIComponent(token)}&documentId=${encodeURIComponent(documentId)}&pageId=${encodeURIComponent(pageId)}`;
 
-    ws.onmessage = (event) => {
-      if (event.data instanceof ArrayBuffer) {
-        // Binary message
-        const decoder = decoding.createDecoder(new Uint8Array(event.data));
-        const messageType = decoding.readVarUint(decoder);
-        
-        if (messageType === 0) {
-          // Yjs sync
+      const ws = new WebSocket(wsUrl);
+      ws.binaryType = 'arraybuffer';
+      currentSocket = ws;
+      wsRef.current = ws; // kept for external reference if needed, but not used for routing
+
+      // Unbind previous handlers if any
+      if (activeUpdateHandler) doc.off('update', activeUpdateHandler);
+      if (activeAwarenessHandler) awareness.off('update', activeAwarenessHandler);
+
+      // Bind new handlers directly to THIS WebSocket
+      activeUpdateHandler = (update: Uint8Array, origin: any) => {
+        if (origin !== 'websocket' && ws.readyState === WebSocket.OPEN) {
           const encoder = encoding.createEncoder();
-          encoding.writeVarUint(encoder, 0);
+          encoding.writeVarUint(encoder, 0); // message type 0 for sync
+          syncProtocol.writeUpdate(encoder, update);
+          ws.send(encoding.toUint8Array(encoder));
+        }
+      };
+      doc.on('update', activeUpdateHandler);
+
+      activeAwarenessHandler = ({ added, updated, removed }: any, origin: any) => {
+        if (origin !== 'websocket' && ws.readyState === WebSocket.OPEN) {
+          const changedClients = added.concat(updated).concat(removed);
+          const encoder = encoding.createEncoder();
+          encoding.writeVarUint(encoder, 1); // message type 1 for awareness
+          const awarenessUpdate = awarenessProtocol.encodeAwarenessUpdate(awareness, changedClients);
+          encoding.writeVarUint8Array(encoder, awarenessUpdate);
+          ws.send(encoding.toUint8Array(encoder));
+        }
+      };
+      awareness.on('update', activeAwarenessHandler);
+
+      ws.onopen = () => {
+        if (isCleanedUp) {
+          ws.close();
+          return;
+        }
+        console.log(`[COLLAB] Connected: doc=${documentId} page=${pageId}`);
+        setStatus('connected');
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+
+        // Request initial state from peers (SyncStep1)
+        const syncEncoder = encoding.createEncoder();
+        encoding.writeVarUint(syncEncoder, 0); // message type 0 for sync
+        syncProtocol.writeSyncStep1(syncEncoder, doc);
+        ws.send(encoding.toUint8Array(syncEncoder));
+
+        // Broadcast our local awareness state
+        if (awareness.getLocalState() !== null) {
+          const awarenessEncoder = encoding.createEncoder();
+          encoding.writeVarUint(awarenessEncoder, 1);
+          const awarenessUpdate = awarenessProtocol.encodeAwarenessUpdate(awareness, [awareness.clientID]);
+          encoding.writeVarUint8Array(awarenessEncoder, awarenessUpdate);
+          ws.send(encoding.toUint8Array(awarenessEncoder));
+        }
+      };
+
+      ws.onmessage = (event) => {
+        if (event.data instanceof ArrayBuffer) {
+          // Binary message
+          const decoder = decoding.createDecoder(new Uint8Array(event.data));
+          const messageType = decoding.readVarUint(decoder);
           
-          const syncMessageType = syncProtocol.readSyncMessage(decoder, encoder, doc, 'websocket');
-          
-          // If we received SyncStep1, readSyncMessage wrote SyncStep2 to our encoder.
-          // We need to send it back.
-          if (syncMessageType === syncProtocol.messageYjsSyncStep1) {
-            if (encoding.length(encoder) > 1 && ws.readyState === WebSocket.OPEN) {
-              ws.send(encoding.toUint8Array(encoder));
-            }
+          if (messageType === 0) {
+            // Yjs sync
+            const encoder = encoding.createEncoder();
+            encoding.writeVarUint(encoder, 0);
             
-            // The peer that sent SyncStep1 just joined. They missed our awareness state.
-            // Send them our local awareness state so they see our cursor/presence immediately.
-            if (awareness.getLocalState() !== null && ws.readyState === WebSocket.OPEN) {
-              const awarenessEncoder = encoding.createEncoder();
-              encoding.writeVarUint(awarenessEncoder, 1); // message type 1 for awareness
-              const awarenessUpdate = awarenessProtocol.encodeAwarenessUpdate(awareness, [awareness.clientID]);
-              encoding.writeVarUint8Array(awarenessEncoder, awarenessUpdate);
-              ws.send(encoding.toUint8Array(awarenessEncoder));
+            const syncMessageType = syncProtocol.readSyncMessage(decoder, encoder, doc, 'websocket');
+            
+            if (syncMessageType === syncProtocol.messageYjsSyncStep1) {
+              if (encoding.length(encoder) > 1 && ws.readyState === WebSocket.OPEN) {
+                ws.send(encoding.toUint8Array(encoder));
+              }
+              
+              if (awareness.getLocalState() !== null && ws.readyState === WebSocket.OPEN) {
+                const awarenessEncoder = encoding.createEncoder();
+                encoding.writeVarUint(awarenessEncoder, 1); // message type 1 for awareness
+                const awarenessUpdate = awarenessProtocol.encodeAwarenessUpdate(awareness, [awareness.clientID]);
+                encoding.writeVarUint8Array(awarenessEncoder, awarenessUpdate);
+                ws.send(encoding.toUint8Array(awarenessEncoder));
+              }
             }
+          } else if (messageType === 1) {
+            // Awareness
+            const update = decoding.readVarUint8Array(decoder);
+            awarenessProtocol.applyAwarenessUpdate(awareness, update, 'websocket');
           }
-        } else if (messageType === 1) {
-          // Awareness
-          const update = decoding.readVarUint8Array(decoder);
-          awarenessProtocol.applyAwarenessUpdate(awareness, update, 'websocket');
-        }
-      } else {
-        // Text message
-        try {
-          const msg = JSON.parse(event.data as string);
-          if (msg.type === 'collaboration:test') {
-            const payload = msg.payload as CollaborationTestMessage;
-            console.log(`[COLLAB] Test message from ${payload.from}: "${payload.message}"`);
-            setLastTestMessage(payload);
-          } else if (msg.type === 'page-border-updated') {
-            setLastPageBorderUpdate(msg.payload as PageBorderUpdate);
+        } else {
+          // Text message
+          try {
+            const msg = JSON.parse(event.data as string);
+            if (msg.type === 'collaboration:test') {
+              const payload = msg.payload as CollaborationTestMessage;
+              console.log(`[COLLAB] Test message from ${payload.from}: "${payload.message}"`);
+              setLastTestMessage(payload);
+            } else if (msg.type === 'page-border-updated') {
+              setLastPageBorderUpdate(msg.payload as PageBorderUpdate);
+            }
+          } catch (err) {
+            console.warn('[COLLAB] Failed to parse message:', err);
           }
-        } catch (err) {
-          console.warn('[COLLAB] Failed to parse message:', err);
         }
-      }
+      };
+
+      ws.onclose = () => {
+        console.log(`[COLLAB] Disconnected: doc=${documentId} page=${pageId}`);
+        if (!isCleanedUp) {
+          setStatus('disconnected');
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(connect, 3000);
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.error('[COLLAB] WebSocket error:', err);
+        if (!isCleanedUp) {
+          setStatus('error');
+        }
+      };
     };
 
-    ws.onclose = () => {
-      console.log(`[COLLAB] Disconnected: doc=${documentId} page=${pageId}`);
-      if (!cleanupCalledRef.current) {
-        setStatus('disconnected');
-      }
-    };
+    connect();
 
-    ws.onerror = (err) => {
-      console.error('[COLLAB] WebSocket error:', err);
-      if (!cleanupCalledRef.current) {
-        setStatus('error');
-      }
-    };
-
-    // Cleanup: close the EXACT socket instance we created
+    // Cleanup for THIS effect execution
     return () => {
-      cleanupCalledRef.current = true;
+      isCleanedUp = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       console.log(`[COLLAB] Cleanup: closing socket for doc=${documentId} page=${pageId}`);
       window.removeEventListener('beforeunload', handleBeforeUnload);
       
       // Explicitly broadcast our departure to remote clients before closing
-      if (ws.readyState === WebSocket.OPEN) {
+      if (currentSocket && currentSocket.readyState === WebSocket.OPEN) {
         awarenessProtocol.removeAwarenessStates(awareness, [awareness.clientID], 'window unload');
       }
 
-      awareness.off('update', handleAwarenessUpdate);
+      if (activeAwarenessHandler) awareness.off('update', activeAwarenessHandler);
       awareness.destroy();
-      doc.off('update', handleUpdate);
+      
+      if (activeUpdateHandler) doc.off('update', activeUpdateHandler);
       doc.destroy();
-      ws.close();
-      wsRef.current = null;
+      
+      if (currentSocket) currentSocket.close();
+      if (wsRef.current === currentSocket) wsRef.current = null;
     };
   }, [documentId, pageId]);
 

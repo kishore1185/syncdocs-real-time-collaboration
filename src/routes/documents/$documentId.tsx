@@ -1,8 +1,8 @@
 import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
-import { api, type OpenDocumentPayload, type PageView } from "../../lib/api";
+import { api, tokenStore, API_BASE, type OpenDocumentPayload, type PageView } from "../../lib/api";
 import { useRequireAuth } from "../../lib/auth";
-import { Hexagon, Share2, ChevronLeft, FilePlus, Users, Lock, Unlock, X } from "lucide-react";
+import { Hexagon, Share2, ChevronLeft, FilePlus, Users, Lock, Unlock, X, Download } from "lucide-react";
 import { toast } from "sonner";
 import * as Popover from "@radix-ui/react-popover";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -14,6 +14,70 @@ import { AiAssistantPanel } from "../../components/editor/AiAssistantPanel";
 import { useCollaboration } from "../../hooks/useCollaboration";
 import * as Y from "yjs";
 import { useDocumentSystem } from "../../hooks/useDocumentSystem";
+
+import html2pdf from "html2pdf.js";
+
+function prepareHtmlForExport(rawHtml: string, token: string): string {
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = rawHtml;
+  const images = tempDiv.querySelectorAll('img');
+  images.forEach(img => {
+    const x = img.getAttribute('data-x') || '96';
+    const y = img.getAttribute('data-y') || '96';
+    const borderStyle = img.getAttribute('data-border-style') || 'none';
+    const borderWidth = img.getAttribute('data-border-width') || '0px';
+    const borderColor = img.getAttribute('data-border-color') || 'transparent';
+    const width = img.getAttribute('width');
+    const height = img.getAttribute('height');
+    
+    let src = img.getAttribute('src') || '';
+    if (src.startsWith('/api/images')) {
+      const origin = API_BASE.replace(/\/api$/, '');
+      src = `${origin}${src}?token=${token}`;
+      img.setAttribute('src', src);
+    }
+
+    img.style.position = 'absolute';
+    img.style.left = `${x}px`;
+    img.style.top = `${y}px`;
+    if (width) img.style.width = `${width}px`;
+    if (height) img.style.height = `${height}px`;
+    if (borderStyle !== 'none') img.style.borderStyle = borderStyle;
+    if (borderWidth !== '0px') img.style.borderWidth = borderWidth;
+    if (borderColor !== 'transparent') img.style.borderColor = borderColor;
+  });
+
+  // html2canvas natively collapses empty block elements containing only <br>.
+  // We explicitly assign their exact structural browser height to prevent the layout 
+  // from collapsing upward and running behind absolute images.
+  const blocks = tempDiv.querySelectorAll('p, h1, h2, h3');
+  blocks.forEach(element => {
+    const block = element as HTMLElement;
+    if (block.textContent?.trim() === '') {
+      const tag = block.tagName.toLowerCase();
+      if (tag === 'p') block.style.minHeight = '1.6em';
+      else if (tag === 'h1') block.style.minHeight = '1.2em';
+      else if (tag === 'h2') block.style.minHeight = '1.3em';
+      else if (tag === 'h3') block.style.minHeight = '1.4em';
+      block.style.display = 'block';
+    }
+  });
+
+  // Highlight Alignment: Convert Tiptap spans to native <mark> elements
+  // html2canvas has an optimized rendering path for <mark> that computes
+  // the background bounding box tightly without relying on line-height distortions.
+  const highlights = tempDiv.querySelectorAll('span[data-color]');
+  highlights.forEach(element => {
+    const span = element as HTMLElement;
+    const mark = document.createElement('mark');
+    mark.style.backgroundColor = span.getAttribute('data-color') || 'yellow';
+    mark.style.color = 'inherit';
+    mark.innerHTML = span.innerHTML;
+    span.parentNode?.replaceChild(mark, span);
+  });
+
+  return tempDiv.innerHTML;
+}
 
 export const Route = createFileRoute("/documents/$documentId")({
   component: DocumentWorkspace,
@@ -159,15 +223,60 @@ function DocumentWorkspace() {
     }
   }, [lastPageBorderUpdate]);
 
-  // System events (page structure)
+  // System events (page structure and presence)
   useDocumentSystem(docData ? documentId : null, useCallback((msg: any) => {
     if (msg.type === 'page-created' && msg.payload?.page) {
       setPages(prev => {
         if (prev.some(p => p.id === msg.payload.page.id)) return prev;
         return [...prev, msg.payload.page];
       });
+    } else if (msg.type === 'page-lock-updated') {
+      const payload = msg.payload;
+      setPages(prev => prev.map(p => {
+        if (p.id === payload.pageId) {
+          return {
+            ...p,
+            isLocked: payload.isLocked,
+            lockedBy: payload.lockedBy || null,
+          };
+        }
+        return p;
+      }));
+    } else if (msg.type === 'document-presence') {
+      const { event, user: presUser } = msg.payload;
+      if (!user || presUser.id === user.id) return;
+      
+      const pending = pendingToastsRef.current.get(presUser.id);
+      
+      if (event === 'joined') {
+        if (pending && pending.type === 'leave') {
+          clearTimeout(pending.timeout);
+          pendingToastsRef.current.delete(presUser.id);
+        } else if (!pending) {
+          const timeout = setTimeout(() => {
+            toast(`${presUser.fullName} joined the document`);
+            globalSeenUsersRef.current.set(presUser.id, Date.now());
+            pendingToastsRef.current.delete(presUser.id);
+            knownUsersRef.current.set(presUser.id, presUser.fullName);
+          }, 500);
+          pendingToastsRef.current.set(presUser.id, { type: 'join', name: presUser.fullName, timeout });
+        }
+      } else if (event === 'left') {
+        if (pending && pending.type === 'join') {
+          clearTimeout(pending.timeout);
+          pendingToastsRef.current.delete(presUser.id);
+        } else if (!pending) {
+          const timeout = setTimeout(() => {
+            toast(`${presUser.fullName} left the document`);
+            pendingToastsRef.current.delete(presUser.id);
+            knownUsersRef.current.delete(presUser.id);
+            lastKnownUserStatesRef.current.delete(presUser.id);
+          }, 500);
+          pendingToastsRef.current.set(presUser.id, { type: 'leave', name: presUser.fullName, timeout });
+        }
+      }
     }
-  }, []));
+  }, [user]));
   
   // Locking state
   const [isLockModalOpen, setIsLockModalOpen] = useState(false);
@@ -264,6 +373,210 @@ function DocumentWorkspace() {
     saveTimeoutRef.current = setTimeout(() => {
       saveContent(activePageId, content, ystateBase64);
     }, 1500);
+  };
+
+  const [isExporting, setIsExporting] = useState(false);
+
+  const handleExportPDF = async () => {
+    if (isExporting || !docData) return;
+    setIsExporting(true);
+    try {
+      // Fetch latest document state to ensure all pages are up to date
+      const latestDoc = await api.openDocument(documentId);
+      
+      const container = window.document.createElement('div');
+      container.style.width = '210mm'; // Exact A4 width
+      
+      // Inherit base document styles explicitly so html2canvas's detached iframe 
+      // preserves the application's fonts, colors, and line-heights.
+      const bodyStyle = window.getComputedStyle(window.document.body);
+      container.style.fontFamily = bodyStyle.fontFamily;
+      container.style.color = '#000000'; // Force black text for PDF (fixes dark-mode invisible text)
+      container.style.lineHeight = bodyStyle.lineHeight;
+      container.style.fontSize = bodyStyle.fontSize;
+      
+      latestDoc.pages.forEach((page, index) => {
+        const pageDiv = window.document.createElement('div');
+        pageDiv.style.height = '297mm'; // Exact A4 height to perfectly match jsPDF slicing
+        pageDiv.style.width = '210mm';
+        pageDiv.style.margin = '0';
+        pageDiv.style.boxSizing = 'border-box';
+        pageDiv.style.position = 'relative';
+        pageDiv.style.overflow = 'hidden';
+        pageDiv.style.backgroundColor = 'white';
+        
+        const borderDiv = window.document.createElement('div');
+        borderDiv.style.position = 'absolute';
+        borderDiv.style.top = '48px';
+        borderDiv.style.right = '48px';
+        borderDiv.style.bottom = '48px';
+        borderDiv.style.left = '48px';
+        borderDiv.style.pointerEvents = 'none';
+        borderDiv.style.zIndex = '0';
+
+        if (page.borderStyle !== 'none') {
+          borderDiv.style.borderStyle = page.borderStyle;
+          borderDiv.style.borderWidth = page.borderWidth;
+          borderDiv.style.borderColor = page.borderColor;
+        }
+        pageDiv.appendChild(borderDiv);
+
+        const contentDiv = window.document.createElement('div');
+        contentDiv.className = 'ProseMirror';
+        contentDiv.style.padding = '96px';
+        contentDiv.style.width = '100%';
+        contentDiv.style.height = '100%';
+        contentDiv.style.boxSizing = 'border-box';
+        // Removed position: relative from here so absolute images position relative to pageDiv
+        contentDiv.style.zIndex = '1';
+        
+        const style = window.document.createElement('style');
+        style.textContent = `
+          .ProseMirror img { max-width: 100%; max-height: 900px; height: auto; object-fit: contain; }
+        `;
+        contentDiv.appendChild(style);
+        
+        const token = tokenStore.get() || '';
+        const htmlContent = prepareHtmlForExport(page.content, token);
+        const innerContent = window.document.createElement('div');
+        innerContent.innerHTML = htmlContent;
+        contentDiv.appendChild(innerContent);
+        
+        pageDiv.appendChild(contentDiv);
+        container.appendChild(pageDiv);
+      });
+
+      // Sanitize filename
+      const title = docData.document.title.trim() || 'Document';
+      const safeFilename = title.replace(/[<>:"/\\|?*\x00-\x1F]/g, ' ').replace(/\s+/g, ' ').trim() + '.pdf';
+
+      // -- EXPORT WRAPPER --
+      // We wrap the container in an off-screen div so it remains attached to the DOM 
+      // (ensuring Tailwind and CSS resolve correctly) without flashing on the user's screen.
+      // We do not apply -9999px directly to the container, because html2pdf clones inline styles
+      // and would render the cloned content completely outside the capture viewport.
+      const exportWrapper = window.document.createElement('div');
+      exportWrapper.style.position = 'absolute';
+      exportWrapper.style.left = '-9999px';
+      exportWrapper.style.top = '-9999px';
+      exportWrapper.appendChild(container);
+      window.document.body.appendChild(exportWrapper);
+
+      const canvasCtx = window.document.createElement('canvas').getContext('2d');
+      const convertAllOklchInString = (str: string): string => {
+        if (!str || typeof str !== 'string' || (!str.includes('oklch') && !str.includes('oklab') && !str.includes('color('))) return str;
+        
+        return str.replace(/oklch\(\s*(-?[0-9.]+)[%\s]+(-?[0-9.]+)[%\s]+(-?[0-9.]+)(?:\s*\/\s*(-?[0-9.]+%?))?\s*\)/g, (fullMatch, p1, p2, p3, p4) => {
+          if (canvasCtx) {
+            canvasCtx.fillStyle = '#000000';
+            canvasCtx.fillStyle = fullMatch;
+            const fill = canvasCtx.fillStyle;
+            if (fill.startsWith('#') || fill.startsWith('rgb') || fill.startsWith('rgba')) {
+              return fill;
+            }
+          }
+          
+          let l = parseFloat(p1);
+          const c = parseFloat(p2);
+          const h = parseFloat(p3);
+          let alpha = 1;
+          
+          if (p1.includes('%')) l = l / 100;
+          if (p4) {
+            alpha = p4.includes('%') ? parseFloat(p4) / 100 : parseFloat(p4);
+          }
+          
+          const hRad = h * Math.PI / 180;
+          const a = c * Math.cos(hRad);
+          const b = c * Math.sin(hRad);
+          
+          const l_ = l + 0.3963377774 * a + 0.2158037573 * b;
+          const m_ = l - 0.1055613458 * a - 0.0638541728 * b;
+          const s_ = l - 0.0894841775 * a - 1.2914855480 * b;
+          
+          const l3 = l_ * l_ * l_;
+          const m3 = m_ * m_ * m_;
+          const s3 = s_ * s_ * s_;
+          
+          let r =  4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3;
+          let g = -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3;
+          let b_ = -0.0041960863 * l3 - 0.7034186147 * m3 + 1.7076147010 * s3;
+          
+          const toSrgb = (channel: number) => {
+            if (channel <= 0.0031308) return 12.92 * channel;
+            return 1.055 * Math.pow(channel, 1 / 2.4) - 0.055;
+          };
+          
+          r = Math.max(0, Math.min(1, toSrgb(r)));
+          g = Math.max(0, Math.min(1, toSrgb(g)));
+          b_ = Math.max(0, Math.min(1, toSrgb(b_)));
+          
+          return `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b_ * 255)}, ${alpha})`;
+        });
+      };
+
+      // Prevent subpixel canvas rounding (Math.ceil) from creating a trailing blank page in jsPDF
+      const pxPerMM = 96 / 25.4;
+      const totalHeightPx = Math.floor(latestDoc.pages.length * 297 * pxPerMM);
+
+      const opt = {
+        margin: 0,
+        filename: safeFilename,
+        image: { type: 'jpeg' as const, quality: 0.98 },
+        html2canvas: { 
+          scale: 2, 
+          useCORS: true, 
+          logging: false,
+          height: totalHeightPx 
+        },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' as const }
+      };
+
+      // -- EXPORT COLOR NORMALIZATION (ROOT-CAUSE FIX) --
+      // html2canvas evaluates all computed styles via window.getComputedStyle.
+      // By intercepting this API during the export, we guarantee html2canvas NEVER sees
+      // an unsupported oklch() color, entirely bypassing its parser crash without mutating the DOM.
+      const originalGetComputedStyle = window.getComputedStyle;
+      window.getComputedStyle = function(elt: Element, pseudoElt?: string | null) {
+        const comp = originalGetComputedStyle.call(window, elt, pseudoElt);
+        return new Proxy(comp, {
+          get(target, prop) {
+            const val = Reflect.get(target, prop, target);
+            if (typeof val === 'function') {
+              if (prop === 'getPropertyValue') {
+                return function(property: string) {
+                  const originalVal = (target as any).getPropertyValue(property);
+                  if (typeof originalVal === 'string' && (originalVal.includes('oklch') || originalVal.includes('oklab') || originalVal.includes('color('))) {
+                    return convertAllOklchInString(originalVal);
+                  }
+                  return originalVal;
+                };
+              }
+              return val.bind(target);
+            }
+            if (typeof val === 'string' && (val.includes('oklch') || val.includes('oklab') || val.includes('color('))) {
+              return convertAllOklchInString(val);
+            }
+            return val;
+          }
+        });
+      };
+
+      try {
+        await html2pdf().from(container).set(opt).save();
+        toast.success("PDF exported successfully");
+      } finally {
+        window.getComputedStyle = originalGetComputedStyle;
+        if (exportWrapper.parentNode) {
+          exportWrapper.parentNode.removeChild(exportWrapper);
+        }
+      }
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err.message || "Failed to export PDF");
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const handleUpdatePageBorder = (border: { style: string; width: string; color: string } | null) => {
@@ -431,6 +744,15 @@ function DocumentWorkspace() {
               </Popover.Content>
             </Popover.Portal>
           </Popover.Root>
+          
+          <button 
+            onClick={handleExportPDF}
+            disabled={isExporting}
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-white border border-zinc-200 px-4 text-sm font-medium text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-indigo-700 disabled:opacity-50 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-700/50"
+          >
+            <Download className="h-4 w-4" />
+            {isExporting ? "Exporting..." : "Export PDF"}
+          </button>
           
           <button 
             onClick={handleCopyRoomId}

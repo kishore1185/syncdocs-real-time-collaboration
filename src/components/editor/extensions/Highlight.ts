@@ -43,14 +43,13 @@ export const Highlight = Mark.create<HighlightOptions>({
 
   parseHTML() {
     return [
-      {
-        tag: 'mark',
-      },
+      { tag: 'mark' },
+      { tag: 'span', getAttrs: node => (node as HTMLElement).hasAttribute('data-color') && null }
     ];
   },
 
   renderHTML({ HTMLAttributes }) {
-    return ['mark', mergeAttributes(this.options.HTMLAttributes, HTMLAttributes), 0];
+    return ['span', mergeAttributes(this.options.HTMLAttributes, HTMLAttributes), 0];
   },
 
   addCommands() {

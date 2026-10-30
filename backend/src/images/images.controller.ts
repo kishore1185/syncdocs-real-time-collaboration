@@ -7,14 +7,14 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 @Controller('images')
 @UseGuards(JwtAuthGuard)
 export class ImagesController {
-  constructor(private readonly imagesService: ImagesService) {}
+  constructor(private readonly imagesService: ImagesService) { }
 
   @Post()
   @UseInterceptors(FileInterceptor('file', {
     limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
   }))
   async uploadImage(
-    @UploadedFile() file: Express.Multer.File, 
+    @UploadedFile() file: Express.Multer.File,
     @Body('documentId') documentId: string,
     @Req() req: any
   ) {

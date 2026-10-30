@@ -39,6 +39,7 @@ const ResizableImageNodeView = (props: any) => {
   }, [node.attrs.width, node.attrs.height, node.attrs.x, node.attrs.y, isResizing, isMoving]);
 
   const handleResizeDown = useCallback((e: React.PointerEvent, direction: string) => {
+    if (!editor.isEditable) return;
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
@@ -112,6 +113,7 @@ const ResizableImageNodeView = (props: any) => {
   }, [updateAttributes, width, height, localPos.x, localPos.y]);
 
   const handleBodyPointerDown = useCallback((e: React.PointerEvent) => {
+    if (!editor.isEditable) return;
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
@@ -223,7 +225,7 @@ const ResizableImageNodeView = (props: any) => {
         draggable={false} 
       />
       
-      {(selected || isResizing || isMoving) && (
+      {(selected || isResizing || isMoving) && editor.isEditable && (
         <>
           <button
             onClick={(e) => {

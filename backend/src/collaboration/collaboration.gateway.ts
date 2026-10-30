@@ -11,6 +11,9 @@ import { PermissionsService } from '../permissions/permissions.service';
 import { Server as HttpServer, IncomingMessage } from 'http';
 import WebSocket, { WebSocketServer } from 'ws';
 import { parse as parseUrl } from 'url';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { Page, PageDocument } from '../pages/schemas/page.schema';
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -37,12 +40,14 @@ export class CollaborationGateway implements OnModuleInit, OnModuleDestroy {
 
   /** roomId → set of sockets in that room */
   private rooms = new Map<string, Set<AuthenticatedSocket>>();
+  private lockedPages = new Set<string>();
 
   constructor(
     private readonly adapterHost: HttpAdapterHost,
     private readonly jwtService: JwtService,
     private readonly usersService: UsersService,
     private readonly permissionsService: PermissionsService,
+    @InjectModel(Page.name) private readonly pageModel: Model<PageDocument>,
   ) {}
 
   /* ---- lifecycle ------------------------------------------------- */
@@ -138,6 +143,16 @@ export class CollaborationGateway implements OnModuleInit, OnModuleDestroy {
     const role = await this.permissionsService.roleFor(documentId, user._id.toString());
     if (!role) throw new Error('No access to this document');
 
+    // Fetch initial lock state for actual pages (skip for system socket)
+    if (pageId !== 'system') {
+      const page = await this.pageModel.findById(pageId).select('isLocked').exec();
+      if (page?.isLocked) {
+        this.lockedPages.add(pageId);
+      } else {
+        this.lockedPages.delete(pageId);
+      }
+    }
+
     this.log.log(
       `Auth OK: user=${user.fullName} (${user._id}) doc=${documentId} page=${pageId} role=${role}`,
     );
@@ -164,6 +179,22 @@ export class CollaborationGateway implements OnModuleInit, OnModuleDestroy {
       `Connected: user=${sock.fullName} room=${sock.roomId} (${roomSize} in room)`,
     );
 
+    if (sock.pageId === 'system') {
+      let count = 0;
+      const systemRoom = this.rooms.get(sock.roomId);
+      if (systemRoom) {
+        for (const s of systemRoom) {
+          if (s.userId === sock.userId) count++;
+        }
+      }
+      if (count === 1) {
+        this.broadcastDocumentSystemEvent(sock.documentId, 'document-presence', {
+          event: 'joined',
+          user: { id: sock.userId, fullName: sock.fullName }
+        }, sock.userId);
+      }
+    }
+
     // Heartbeat pong
     sock.on('pong', () => {
       sock.isAlive = true;
@@ -172,6 +203,18 @@ export class CollaborationGateway implements OnModuleInit, OnModuleDestroy {
     // Message handling
     sock.on('message', (data, isBinary) => {
       if (isBinary) {
+        if (this.lockedPages.has(sock.pageId)) {
+          const uint8 = new Uint8Array(data as Buffer);
+          if (uint8.length >= 2) {
+            const messageType = uint8[0];
+            const syncType = uint8[1];
+            // If it's a Yjs Sync message (0) and contains an update (1 or 2)
+            if (messageType === 0 && (syncType === 1 || syncType === 2)) {
+              this.log.debug(`Blocked Yjs sync update for locked page ${sock.pageId}`);
+              return;
+            }
+          }
+        }
         // Forward Yjs binary sync messages to other clients in the room
         this.broadcastBinaryToRoom(sock.roomId, sock, data);
         return;
@@ -207,6 +250,22 @@ export class CollaborationGateway implements OnModuleInit, OnModuleDestroy {
     this.log.log(
       `Disconnected: user=${sock.fullName} room=${sock.roomId} (${remaining} remaining)`,
     );
+
+    if (sock.pageId === 'system') {
+      let count = 0;
+      const systemRoom = this.rooms.get(sock.roomId);
+      if (systemRoom) {
+        for (const s of systemRoom) {
+          if (s.userId === sock.userId) count++;
+        }
+      }
+      if (count === 0) {
+        this.broadcastDocumentSystemEvent(sock.documentId, 'document-presence', {
+          event: 'left',
+          user: { id: sock.userId, fullName: sock.fullName }
+        }, sock.userId);
+      }
+    }
   }
 
   /* ---- message handling ------------------------------------------ */
@@ -285,6 +344,21 @@ export class CollaborationGateway implements OnModuleInit, OnModuleDestroy {
         sock.send(json);
       }
     }
+  }
+
+  public updatePageLockState(documentId: string, pageId: string, isLocked: boolean, lockedBy: { id: string, fullName: string } | null = null) {
+    if (isLocked) {
+      this.lockedPages.add(pageId);
+    } else {
+      this.lockedPages.delete(pageId);
+    }
+    
+    // Broadcast to the document system channel so all clients in the document see it immediately
+    this.broadcastDocumentSystemEvent(documentId, 'page-lock-updated', {
+      pageId,
+      isLocked,
+      lockedBy
+    });
   }
 
   private broadcastBinaryToRoom(

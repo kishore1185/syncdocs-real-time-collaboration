@@ -159,6 +159,7 @@
     margin-top: 1em;
     margin-bottom: 1em;
     line-height: 1.6;
+    min-height: 1em;
   }
   
   .ProseMirror h1 {

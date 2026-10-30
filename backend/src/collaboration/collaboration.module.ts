@@ -4,11 +4,14 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { UsersModule } from '../users/users.module';
 import { PermissionsModule } from '../permissions/permissions.module';
 import { CollaborationGateway } from './collaboration.gateway';
+import { MongooseModule } from '@nestjs/mongoose';
+import { Page, PageSchema } from '../pages/schemas/page.schema';
 
 @Module({
   imports: [
     UsersModule,
     PermissionsModule,
+    MongooseModule.forFeature([{ name: Page.name, schema: PageSchema }]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

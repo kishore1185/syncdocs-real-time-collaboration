@@ -93,7 +93,7 @@ export function DocumentEditor({ initialContent, isLocked, lockedBy, pageBorder,
     },
     editorProps: {
       attributes: {
-        class: 'focus:outline-none min-h-[1056px] px-[96px] py-[96px]',
+        class: 'focus:outline-none min-h-[1122px] px-[96px] py-[96px]',
       },
     },
   });
@@ -114,7 +114,7 @@ export function DocumentEditor({ initialContent, isLocked, lockedBy, pageBorder,
 
   return (
     <div 
-      className="w-full min-h-[1056px] bg-white shadow-md dark:bg-zinc-900 sm:rounded-sm relative mx-auto overflow-hidden transition-all"
+      className="w-full max-w-[794px] min-h-[1122px] bg-white shadow-md dark:bg-zinc-900 sm:rounded-sm relative mx-auto overflow-hidden transition-all"
     >
       <div 
         className="absolute inset-12 pointer-events-none z-0" 

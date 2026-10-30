@@ -281,6 +281,8 @@ export class PagesService implements OnModuleDestroy {
       action: 'PAGE_LOCKED',
       details: `Locked page ${page.pageNumber}`,
     });
+    const user = await this.usersService.findById(userId);
+    this.collaborationGateway.updatePageLockState(documentId, pageId, true, { id: userId, fullName: user?.fullName ?? 'Unknown' });
     return (await this.toViews([page]))[0];
   }
 
@@ -304,6 +306,7 @@ export class PagesService implements OnModuleDestroy {
       action: 'PAGE_UNLOCKED',
       details: `Unlocked page ${page.pageNumber}`,
     });
+    this.collaborationGateway.updatePageLockState(documentId, pageId, false, null);
     return (await this.toViews([page]))[0];
   }
 
