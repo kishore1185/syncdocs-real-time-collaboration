@@ -2,7 +2,24 @@ import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { api, tokenStore, API_BASE, type OpenDocumentPayload, type PageView } from "../../lib/api";
 import { useRequireAuth } from "../../lib/auth";
-import { Hexagon, Share2, ChevronLeft, FilePlus, Users, Lock, Unlock, X, Download } from "lucide-react";
+import { Hexagon, Share2, ChevronLeft, FilePlus, Users, Lock, Unlock, X, Download, MoreVertical, Trash2 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "../../components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../../components/ui/alert-dialog";
 import { toast } from "sonner";
 import * as Popover from "@radix-ui/react-popover";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -92,6 +109,15 @@ function DocumentWorkspace() {
   
   const [pages, setPages] = useState<PageView[]>([]);
   const [activePageId, setActivePageId] = useState<string | null>(null);
+  const activePageIdRef = useRef<string | null>(activePageId);
+  useEffect(() => {
+    activePageIdRef.current = activePageId;
+  }, [activePageId]);
+
+  const [pageToDelete, setPageToDelete] = useState<PageView | null>(null);
+  const [isDeletingPage, setIsDeletingPage] = useState(false);
+  const [lockTargetPageId, setLockTargetPageId] = useState<string | null>(null);
+
   const activePage = pages.find(p => p.id === activePageId);
   
   const [editor, setEditor] = useState<Editor | null>(null);
@@ -223,6 +249,16 @@ function DocumentWorkspace() {
     }
   }, [lastPageBorderUpdate]);
 
+  // Mark switching page state in awareness to avoid false departure toasts
+  const markSwitchingPage = useCallback(() => {
+    if (awareness) {
+      const currentUserState = awareness.getLocalState()?.['user'];
+      if (currentUserState) {
+        awareness.setLocalStateField('user', { ...currentUserState, switchingPage: true });
+      }
+    }
+  }, [awareness]);
+
   // System events (page structure and presence)
   useDocumentSystem(docData ? documentId : null, useCallback((msg: any) => {
     if (msg.type === 'page-created' && msg.payload?.page) {
@@ -230,6 +266,28 @@ function DocumentWorkspace() {
         if (prev.some(p => p.id === msg.payload.page.id)) return prev;
         return [...prev, msg.payload.page];
       });
+    } else if (msg.type === 'page-deleted' && msg.payload) {
+      const { pageId, remainingPages } = msg.payload;
+
+      setPages(prev => {
+        const deletedIndex = prev.findIndex(p => p.id === pageId);
+        const filtered = prev.filter(p => p.id !== pageId);
+
+        // If this collaborator is currently viewing the deleted page, navigate to an adjacent remaining page
+        if (activePageIdRef.current === pageId && filtered.length > 0) {
+          const nextActive = filtered[deletedIndex] ?? filtered[deletedIndex - 1] ?? filtered[0];
+          if (nextActive) {
+            markSwitchingPage();
+            setActivePageId(nextActive.id);
+          }
+        }
+
+        if (remainingPages && Array.isArray(remainingPages)) {
+          return remainingPages;
+        }
+        return filtered.map((p, idx) => ({ ...p, pageNumber: idx + 1 }));
+      });
+      toast.info("A page was deleted by a collaborator.");
     } else if (msg.type === 'page-lock-updated') {
       const payload = msg.payload;
       setPages(prev => prev.map(p => {
@@ -276,7 +334,7 @@ function DocumentWorkspace() {
         }
       }
     }
-  }, [user]));
+  }, [user, markSwitchingPage]));
   
   // Locking state
   const [isLockModalOpen, setIsLockModalOpen] = useState(false);
@@ -310,15 +368,6 @@ function DocumentWorkspace() {
     }
   }, [user, documentId]);
 
-  const markSwitchingPage = () => {
-    if (awareness) {
-      const currentUserState = awareness.getLocalState()?.['user'];
-      if (currentUserState) {
-        awareness.setLocalStateField('user', { ...currentUserState, switchingPage: true });
-      }
-    }
-  };
-
   const handleAddPage = async () => {
     try {
       markSwitchingPage();
@@ -328,6 +377,62 @@ function DocumentWorkspace() {
       toast.success("Page added");
     } catch (err: any) {
       toast.error(err.message || "Unable to create page. Please try again.");
+    }
+  };
+
+  const handleDeletePageConfirm = async () => {
+    if (!pageToDelete || isDeletingPage) return;
+
+    if (pageToDelete.isLocked) {
+      toast.error("Locked pages cannot be deleted.");
+      setPageToDelete(null);
+      return;
+    }
+
+    if (pages.length <= 1) {
+      toast.error("At least one page must remain in the document.");
+      setPageToDelete(null);
+      return;
+    }
+
+    setIsDeletingPage(true);
+    const targetId = pageToDelete.id;
+    const targetPageNumber = pageToDelete.pageNumber;
+
+    try {
+      if (activePageId === targetId && saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
+      }
+
+      const res = await api.deletePage(documentId, targetId);
+
+      if (activePageId === targetId) {
+        const deletedIndex = pages.findIndex(p => p.id === targetId);
+        const remainingAfter = pages.filter(p => p.id !== targetId);
+        const nextActive = remainingAfter[deletedIndex] ?? remainingAfter[deletedIndex - 1] ?? null;
+
+        markSwitchingPage();
+        if (nextActive) {
+          setActivePageId(nextActive.id);
+        }
+      }
+
+      if (res.remainingPages) {
+        setPages(res.remainingPages);
+      } else {
+        setPages(prev => {
+          const filtered = prev.filter(p => p.id !== targetId);
+          return filtered.map((p, idx) => ({ ...p, pageNumber: idx + 1 }));
+        });
+      }
+
+      toast.success(`Page ${targetPageNumber} deleted`);
+      setPageToDelete(null);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to delete page. Please try again.");
+    } finally {
+      setIsDeletingPage(false);
     }
   };
 
@@ -609,21 +714,23 @@ function DocumentWorkspace() {
 
   const handleLockUnlockSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activePageId || !lockPassword) return;
+    const targetId = lockTargetPageId || activePageId;
+    if (!targetId || !lockPassword) return;
     
     setIsLocking(true);
     try {
       if (lockAction === "lock") {
-        const updatedPage = await api.lockPage(documentId, activePageId, lockPassword);
-        setPages(prev => prev.map(p => p.id === activePageId ? updatedPage : p));
+        const updatedPage = await api.lockPage(documentId, targetId, lockPassword);
+        setPages(prev => prev.map(p => p.id === targetId ? updatedPage : p));
         toast.success("Page locked");
       } else {
-        const updatedPage = await api.unlockPage(documentId, activePageId, lockPassword);
-        setPages(prev => prev.map(p => p.id === activePageId ? updatedPage : p));
+        const updatedPage = await api.unlockPage(documentId, targetId, lockPassword);
+        setPages(prev => prev.map(p => p.id === targetId ? updatedPage : p));
         toast.success("Page unlocked");
       }
       setIsLockModalOpen(false);
       setLockPassword("");
+      setLockTargetPageId(null);
     } catch (err: any) {
       toast.error(err.message || (lockAction === "unlock" ? "Incorrect password." : "Failed to lock page."));
     } finally {
@@ -786,7 +893,7 @@ function DocumentWorkspace() {
             {pages.map((page, index) => {
               const isActive = activePageId === page.id;
               return (
-                <div key={page.id} className="relative group">
+                <div key={page.id} className="relative group flex items-center">
                   <button
                     onClick={() => {
                       if (activePageId !== page.id) {
@@ -794,7 +901,7 @@ function DocumentWorkspace() {
                         setActivePageId(page.id);
                       }
                     }}
-                    className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${
+                    className={`flex w-full items-center gap-2.5 rounded-md pl-3 pr-8 py-2 text-sm transition-colors ${
                       isActive
                         ? "bg-white text-zinc-900 shadow-sm border border-zinc-200 dark:bg-zinc-800 dark:border-zinc-700 dark:text-white" 
                         : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800/50 dark:hover:text-zinc-200"
@@ -805,22 +912,62 @@ function DocumentWorkspace() {
                     </div>
                     <span className="truncate flex-1 text-left">Page {page.pageNumber}</span>
                     
-                    {page.isLocked && <Lock className="h-3 w-3 text-zinc-400" />}
+                    {page.isLocked && <Lock className="h-3 w-3 text-zinc-400 shrink-0" />}
                   </button>
                   
-                  {/* Page Controls (Lock/Unlock) visible when active or hovered */}
-                  {isActive && (
-                    <button 
-                      onClick={() => {
-                        setLockAction(page.isLocked ? "unlock" : "lock");
-                        setIsLockModalOpen(true);
-                      }}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 bg-white dark:bg-zinc-800 rounded-md shadow-sm border border-zinc-200 dark:border-zinc-700"
-                      title={page.isLocked ? "Unlock Page" : "Lock Page"}
-                    >
-                      {page.isLocked ? <Unlock className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />}
-                    </button>
-                  )}
+                  {/* Three-dot page options menu */}
+                  <div className="absolute right-1 top-1/2 -translate-y-1/2 z-10">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button 
+                          onClick={(e) => e.stopPropagation()}
+                          className="flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-200/70 hover:text-zinc-700 dark:hover:bg-zinc-700/70 dark:hover:text-zinc-200 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-indigo-500"
+                          title="Page options"
+                          aria-label={`Options for Page ${page.pageNumber}`}
+                        >
+                          <MoreVertical className="h-4 w-4" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-44">
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setLockTargetPageId(page.id);
+                            setLockAction(page.isLocked ? "unlock" : "lock");
+                            setIsLockModalOpen(true);
+                          }}
+                          className="cursor-pointer"
+                        >
+                          {page.isLocked ? (
+                            <>
+                              <Unlock className="h-4 w-4 text-zinc-500" />
+                              <span>Unlock Page</span>
+                            </>
+                          ) : (
+                            <>
+                              <Lock className="h-4 w-4 text-zinc-500" />
+                              <span>Lock Page</span>
+                            </>
+                          )}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          disabled={page.isLocked || pages.length <= 1}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (page.isLocked || pages.length <= 1) return;
+                            setPageToDelete(page);
+                          }}
+                          className={`cursor-pointer text-red-600 focus:text-red-600 focus:bg-red-50 dark:text-red-400 dark:focus:bg-red-950/50 ${
+                            page.isLocked || pages.length <= 1 ? "opacity-50 cursor-not-allowed pointer-events-none" : ""
+                          }`}
+                        >
+                          <Trash2 className="h-4 w-4 text-red-600 dark:text-red-400" />
+                          <span>Delete Page</span>
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
                 </div>
               );
             })}
@@ -854,7 +1001,16 @@ function DocumentWorkspace() {
       </div>
 
       {/* Lock/Unlock Modal */}
-      <Dialog.Root open={isLockModalOpen} onOpenChange={setIsLockModalOpen}>
+      <Dialog.Root 
+        open={isLockModalOpen} 
+        onOpenChange={(open) => {
+          setIsLockModalOpen(open);
+          if (!open) {
+            setLockPassword("");
+            setLockTargetPageId(null);
+          }
+        }}
+      >
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
           <Dialog.Content className="fixed left-[50%] top-[50%] z-50 w-full max-w-md translate-x-[-50%] translate-y-[-50%] rounded-xl border border-zinc-200 bg-white p-6 shadow-xl dark:border-zinc-800 dark:bg-zinc-950 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]">
@@ -911,6 +1067,38 @@ function DocumentWorkspace() {
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
+
+      {/* Delete Page Confirmation Dialog */}
+      <AlertDialog
+        open={!!pageToDelete}
+        onOpenChange={(open) => {
+          if (!open && !isDeletingPage) {
+            setPageToDelete(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Page?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this page? This action will permanently remove this page and its content from the document.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeletingPage}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                handleDeletePageConfirm();
+              }}
+              disabled={isDeletingPage}
+              className="bg-red-600 hover:bg-red-700 text-white focus:ring-red-600"
+            >
+              {isDeletingPage ? "Deleting..." : "Delete Page"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
     </div>
   );

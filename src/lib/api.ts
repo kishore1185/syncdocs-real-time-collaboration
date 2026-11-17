@@ -177,6 +177,12 @@ export const api = {
   addPage: (documentId: string) =>
     request<PageView>(`/documents/${documentId}/pages`, { method: "POST" }),
 
+  deletePage: (documentId: string, pageId: string) =>
+    request<{ id: string; deleted: true; remainingPages: PageView[] }>(
+      `/documents/${documentId}/pages/${pageId}`,
+      { method: "DELETE" },
+    ),
+
   savePage: (documentId: string, pageId: string, content: string, ystateBase64?: string, border?: { style: string, width: string, color: string }) =>
     request<{ pageId: string; status: "saving" | "saved"; lastSavedAt: string | null }>(
       `/documents/${documentId}/pages/${pageId}/content`,

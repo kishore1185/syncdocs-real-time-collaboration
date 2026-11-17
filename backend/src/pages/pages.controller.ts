@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Put } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put } from '@nestjs/common';
 import { PagesService } from './pages.service';
 import { PermissionsService } from '../permissions/permissions.service';
 import { AuthUser, CurrentUser } from '../common/decorators/current-user.decorator';
@@ -42,6 +42,17 @@ export class PagesController {
   ) {
     await this.permissions.require(documentId, user.userId, 'viewer');
     return this.pages.get(documentId, pageId);
+  }
+
+  @Delete(':pageId')
+  @HttpCode(200)
+  async delete(
+    @Param('documentId', ObjectIdPipe) documentId: string,
+    @Param('pageId', ObjectIdPipe) pageId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    await this.permissions.require(documentId, user.userId, 'editor');
+    return this.pages.delete(documentId, pageId, user.userId);
   }
 
   /** Debounced autosave target. Responds with { status: 'saving', lastSavedAt }. */

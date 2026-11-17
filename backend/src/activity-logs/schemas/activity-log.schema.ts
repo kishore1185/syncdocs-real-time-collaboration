@@ -9,6 +9,7 @@ export type ActivityAction =
   | 'DOCUMENT_DELETED'
   | 'PAGE_CREATED'
   | 'PAGE_UPDATED'
+  | 'PAGE_DELETED'
   | 'PAGE_LOCKED'
   | 'PAGE_UNLOCKED'
   | 'COLLABORATOR_JOINED'
@@ -22,6 +23,7 @@ export const ACTIVITY_ACTIONS: ActivityAction[] = [
   'DOCUMENT_DELETED',
   'PAGE_CREATED',
   'PAGE_UPDATED',
+  'PAGE_DELETED',
   'PAGE_LOCKED',
   'PAGE_UNLOCKED',
   'COLLABORATOR_JOINED',

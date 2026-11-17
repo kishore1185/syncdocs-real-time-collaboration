@@ -117,6 +117,74 @@ export class PagesService implements OnModuleDestroy {
     throw new ConflictException('Could not add a page right now. Please try again.');
   }
 
+  /**
+   * Deletes a page, enforces lock and minimum-page rules, renumbers remaining pages,
+   * logs the action, and broadcasts the deletion to all document collaborators.
+   */
+  async delete(
+    documentId: string,
+    pageId: string,
+    userId: string,
+  ): Promise<{ id: string; deleted: true; remainingPages: PageView[] }> {
+    const docId = new Types.ObjectId(documentId);
+    const page = await this.findOwned(documentId, pageId);
+
+    if (page.isLocked) {
+      throw new ForbiddenException('Locked pages cannot be deleted. Unlock the page first.');
+    }
+
+    const totalPages = await this.pageModel.countDocuments({ documentId: docId }).exec();
+    if (totalPages <= 1) {
+      throw new BadRequestException('Cannot delete the only page in the document. A document must have at least one page.');
+    }
+
+    // Cancel any pending debounced autosave write for this page
+    this.cancelPending(pageId);
+
+    // Delete the page
+    await this.pageModel.deleteOne({ _id: page._id }).exec();
+
+    // Renumber all subsequent pages in ascending order to prevent unique index collisions
+    const higherPages = await this.pageModel
+      .find({ documentId: docId, pageNumber: { $gt: page.pageNumber } })
+      .sort({ pageNumber: 1 })
+      .exec();
+
+    for (const p of higherPages) {
+      await this.pageModel
+        .updateOne({ _id: p._id }, { $set: { pageNumber: p.pageNumber - 1 } })
+        .exec();
+    }
+
+    const now = new Date();
+    await this.documentModel
+      .updateOne({ _id: docId }, { $set: { lastSavedAt: now } })
+      .exec();
+
+    void this.activityLogs.record({
+      documentId,
+      userId,
+      pageId: page._id,
+      action: 'PAGE_DELETED',
+      details: `Deleted page ${page.pageNumber}`,
+    });
+
+    const remainingPages = await this.list(documentId);
+
+    this.collaborationGateway.broadcastDocumentSystemEvent(
+      documentId,
+      'page-deleted',
+      {
+        pageId,
+        deletedPageNumber: page.pageNumber,
+        remainingPages,
+      },
+      userId,
+    );
+
+    return { id: pageId, deleted: true, remainingPages };
+  }
+
   async deleteAllForDocument(documentId: Types.ObjectId) {
     const pages = await this.pageModel.find({ documentId }, { _id: 1 }).exec();
     for (const p of pages) this.cancelPending(p._id.toString());
